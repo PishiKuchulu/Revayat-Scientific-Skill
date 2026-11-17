@@ -507,8 +507,48 @@ fn t4_dump(path: &Path, root: Handle) {
         eprintln!("T4 token restricted={restricted}");
         let mut owned = Owned(token);
         let _ = owned.close();
-    } else {
-        eprintln!("T4 token open_failed");
+    }
+    // T5 replica: clone the root descriptor onto a fresh temp-volume directory and retry the
+    // plain WRITE_DAC open there; this bisects token-side from volume-stack-side causes.
+    if let Ok(raw) = access::security(root, 0x17) {
+        let parsed: Handle = raw.as_ptr().cast_mut().cast();
+        {
+            let (mut owner, mut dacl) = (null_mut(), null_mut());
+            let (mut present, mut defaulted) = (0, 0);
+            let extracted =
+                unsafe { GetSecurityDescriptorOwner(parsed, &mut owner, &mut defaulted) } != 0
+                    && unsafe {
+                        GetSecurityDescriptorDacl(parsed, &mut present, &mut dacl, &mut defaulted)
+                    } != 0
+                    && present != 0;
+            if extracted {
+                let replica =
+                    std::env::temp_dir().join(format!("rvy-t5-replica-{}", std::process::id()));
+                if std::fs::create_dir(&replica).is_ok() {
+                    let mut replica_wide = wide(&replica);
+                    let rc = unsafe {
+                        SetNamedSecurityInfoW(
+                            replica_wide.as_mut_ptr(),
+                            1,
+                            0x5,
+                            owner,
+                            null_mut(),
+                            dacl,
+                            null_mut(),
+                        )
+                    };
+                    let code = match Owned::open(&replica, 0x0004_0000, 0x7, 0x0200_0003) {
+                        Ok(mut handle) => {
+                            let _ = handle.close();
+                            0
+                        }
+                        Err(error) => error.raw_os_error().unwrap_or(-1),
+                    };
+                    eprintln!("T5 replica set_rc={rc} open={code}");
+                    let _ = std::fs::remove_dir(&replica);
+                }
+            }
+        }
     }
 }
 
@@ -562,6 +602,10 @@ fn set_dacl(
 ) -> Result<()> {
     // Restore privilege is applied at the backup-intent open, not merely enabled around a
     // pathname setter. FILE_READ_ATTRIBUTES is requested explicitly for the identity bind.
+    // T5 (fork-only experiment): the canonical backup/restore pair enables SeBackupPrivilege
+    // alongside the caller's SeRestorePrivilege for the writer open.
+    let mut backup = access::ManageVolume::acquire_optional("SeBackupPrivilege")?;
+    eprintln!("T5 backup_acquired={}", u8::from(backup.is_some()));
     let mut target = open_writer(path, root, progress)?;
     *progress |= 0x10;
     let result = (|| {
