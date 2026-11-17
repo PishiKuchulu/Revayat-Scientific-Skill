@@ -461,7 +461,7 @@ unsafe extern "system" {
     fn DuplicateTokenEx(
         existing: Handle,
         desired: u32,
-        attributes: *const std::ffi::c_void,
+        attributes: *mut std::ffi::c_void,
         level: i32,
         kind: i32,
         new_token: *mut Handle,
