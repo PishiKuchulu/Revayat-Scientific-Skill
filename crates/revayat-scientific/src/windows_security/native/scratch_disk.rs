@@ -400,6 +400,7 @@ impl ScratchVolume {
                         eprintln!("T11 after quota enforce");
                         drop(quota);
                         let (serial, bytes) = filesystem(&mount.root)?;
+                        eprintln!("T12 after filesystem 2");
                         let private = super::scratch_private::PrivateCreator::prepare(
                             &mount.root,
                             &host,

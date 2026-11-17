@@ -110,6 +110,7 @@ impl PrivateCreator {
         let path = PathBuf::from(folder);
         absent(&path)?;
         let mut root_pin = Owned::open(root, 0x80, 3, 0x2200000)?;
+        eprintln!("T12 private root pinned");
         let result = (|| {
             let root_id = access::identity(root_pin.0, true)?;
             let native_root = access::name(root_pin.0)?;
@@ -131,8 +132,10 @@ impl PrivateCreator {
             } else {
                 Err(access::native_error("create private creator directory"))
             };
+            eprintln!("T12 private dir created");
             access::combine(result, descriptor.close())?;
             let mut pin = Owned::open(&path, 0x20081, 3, 0x2200000)?;
+            eprintln!("T12 private dir pinned");
             let result = (|| {
                 let id = access::identity(pin.0, true)?;
                 let binding = Binding {
@@ -151,6 +154,7 @@ impl PrivateCreator {
                 };
                 let binding = &owner.binding;
                 portable(owner.lifecycle.prepare(|| shared(binding.empty())))?;
+                eprintln!("T12 private lifecycle prepared");
                 Ok(owner)
             })();
             access::combine(result, pin.close())
