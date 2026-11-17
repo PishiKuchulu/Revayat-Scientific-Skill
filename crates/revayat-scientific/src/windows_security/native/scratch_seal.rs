@@ -323,7 +323,9 @@ fn root_evidence(root: Handle, numbers: &mut diagnostics::Numbers) {
 }
 
 /// Effective-token evidence: bit0 thread impersonating, bit1/2 restore present/enabled,
-/// bit3/4 take-ownership present/enabled, bits 8-15 elevation type, bits 16-31 integrity RID.
+/// bit3/4 take-ownership present/enabled, bit5 Administrators group present, bit6 that
+/// group enabled, bit7 that group use-for-deny-only, bits 8-15 elevation type,
+/// bits 16-31 integrity RID.
 fn token_evidence() -> u32 {
     let mut token = null_mut();
     let mut value = 0u32;
@@ -370,6 +372,51 @@ fn token_evidence() -> u32 {
                 let attributes = u32::from_le_bytes(bytes[at + 8..at + 12].try_into().unwrap());
                 if entry == luid {
                     value |= present | (u32::from(attributes & 2 != 0) * (present << 1));
+                }
+            }
+        }
+    }
+    // TokenGroups lives in a larger buffer: the group array plus every pointed-to SID
+    // must fit, or the query fails and the Administrators bits stay unset (unrecorded).
+    let mut groups_buffer = vec![0u64; 2048];
+    let mut groups_returned = 0u32;
+    // SAFETY: bounded 16 KiB aligned buffer for the fixed TokenGroups information class.
+    let groups_ok = unsafe {
+        GetTokenInformation(
+            token.0,
+            2,
+            groups_buffer.as_mut_ptr().cast(),
+            (groups_buffer.len() * 8) as u32,
+            &mut groups_returned,
+        ) != 0
+    };
+    if groups_ok {
+        let bytes: &[u8] =
+            unsafe { std::slice::from_raw_parts(groups_buffer.as_ptr().cast(), 16384) };
+        let groups = u32::from_le_bytes(bytes[..4].try_into().unwrap()).min(255) as usize;
+        for index in 0..groups {
+            let at = 8 + index * 16;
+            let pointer = u64::from_le_bytes(bytes[at..at + 8].try_into().unwrap());
+            let attributes = u32::from_le_bytes(bytes[at + 8..at + 12].try_into().unwrap());
+            if pointer == 0 {
+                continue;
+            }
+            // SAFETY: a token group SID pointer addresses the same token buffer; its
+            // length is derived from its own sub-authority count and stays bounded.
+            let sid_pointer = pointer as *const u8;
+            let sub_authorities = usize::from(unsafe { *sid_pointer.add(1) });
+            let length = 8 + sub_authorities * 4;
+            if !(8..=64).contains(&length) {
+                continue;
+            }
+            let sid: &[u8] = unsafe { std::slice::from_raw_parts(sid_pointer, length) };
+            if sid_class(sid) == 1 {
+                value |= 0x20;
+                if attributes & 4 != 0 {
+                    value |= 0x40;
+                }
+                if attributes & 0x10 != 0 {
+                    value |= 0x80;
                 }
             }
         }
