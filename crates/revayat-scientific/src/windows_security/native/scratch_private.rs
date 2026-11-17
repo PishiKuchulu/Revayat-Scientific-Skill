@@ -198,14 +198,29 @@ impl PrivateCreator {
                 descriptor: descriptor.0,
                 inherit: 0,
             };
-            let result = if unsafe { CreateDirectoryW(text.as_ptr(), &security) } != 0 {
+            let mut guard = None;
+            let mut result = if unsafe { CreateDirectoryW(text.as_ptr(), &security) } != 0 {
                 Ok(())
             } else {
                 let code = std::io::Error::last_os_error().raw_os_error().unwrap_or(-1);
                 eprintln!("T14 create dir error={code}");
                 Err(access::native_error("create private creator directory"))
             };
+            if result.is_err() {
+                // T15 experiment: creating a directory with a SACL requires
+                // SeSecurityPrivilege; enable it and retry the identical create.
+                guard = access::ManageVolume::acquire_optional("SeSecurityPrivilege")?;
+                eprintln!("T15 security_priv={}", u8::from(guard.is_some()));
+                result = if unsafe { CreateDirectoryW(text.as_ptr(), &security) } != 0 {
+                    Ok(())
+                } else {
+                    let code = std::io::Error::last_os_error().raw_os_error().unwrap_or(-1);
+                    eprintln!("T15 create retry error={code}");
+                    Err(access::native_error("create private creator directory"))
+                };
+            }
             access::combine(result, descriptor.close())?;
+            drop(guard);
             eprintln!("T12 private dir created");
             let mut pin = match Owned::open(&path, 0x20081, 3, 0x2200000) {
                 Ok(pin) => pin,
