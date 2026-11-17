@@ -669,18 +669,24 @@ pub(super) fn require_root_seal(root: super::Handle, intent: &Intent) -> Result<
         let expected = unsafe { std::slice::from_raw_parts(expected.0.cast::<u8>(), size) };
         let actual = crate::windows_security::policy::Descriptor::parse(&actual)?;
         let expected = crate::windows_security::policy::Descriptor::parse(expected)?;
+        let dacl_eq =
+            crate::windows_security::policy::serialized_acl_equal(actual.dacl, expected.dacl)?;
+        let sacl_eq =
+            crate::windows_security::policy::serialized_acl_equal(actual.sacl, expected.sacl)?;
+        eprintln!(
+            "T10 verify owner={} group={} control=0x{:04X} dacl={} sacl={}",
+            actual.owner == expected.owner,
+            actual.group.is_some(),
+            actual.control,
+            dacl_eq,
+            sacl_eq
+        );
         ensure!(
             actual.owner == expected.owner
                 && actual.group.is_some()
                 && actual.control & 0x1004 == 0x1004
-                && crate::windows_security::policy::serialized_acl_equal(
-                    actual.dacl,
-                    expected.dacl,
-                )?
-                && crate::windows_security::policy::serialized_acl_equal(
-                    actual.sacl,
-                    expected.sacl,
-                )?,
+                && dacl_eq
+                && sacl_eq,
             "scratch writable root policy differs"
         );
         Ok(())
