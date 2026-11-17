@@ -384,14 +384,20 @@ impl ScratchVolume {
                         );
                         filesystem(&mount.root)?;
                         phase(seal_root(&mount.root, root.0, &intent), Stage::ScratchSeal)?;
+                        eprintln!("T11 after seal");
                         let quota = phase(
                             super::scratch_quota::Quota::new(&mount.root),
                             Stage::ScratchQuota,
                         )?;
+                        eprintln!("T11 after quota new");
                         phase(quota.defaults(), Stage::ScratchQuota)?;
+                        eprintln!("T11 after quota defaults");
                         phase(quota.owner(&host), Stage::ScratchQuota)?;
+                        eprintln!("T11 after quota owner host");
                         quota.owner(view.package_sid())?;
+                        eprintln!("T11 after quota owner package");
                         phase(quota.enforce(), Stage::ScratchQuota)?;
+                        eprintln!("T11 after quota enforce");
                         drop(quota);
                         let (serial, bytes) = filesystem(&mount.root)?;
                         let private = super::scratch_private::PrivateCreator::prepare(
@@ -399,6 +405,7 @@ impl ScratchVolume {
                             &host,
                             view.package_sid(),
                         )?;
+                        eprintln!("T11 after private prepare");
                         let ready = Ready {
                             mount,
                             root_id,
@@ -422,13 +429,18 @@ impl ScratchVolume {
                         };
                         let result = (|| {
                             phase(volume.require_seal(), Stage::ScratchSeal)?;
+                            eprintln!("T11 after require seal 2");
                             phase(
                                 volume.private.as_mut().unwrap().seal(),
                                 Stage::ScratchPrivate,
                             )?;
+                            eprintln!("T11 after private seal");
                             phase(volume.prepare_folders(), Stage::ScratchReady)?;
+                            eprintln!("T11 after folders");
                             access::write_json(&state, &host, "scratch-disk.ready", &volume.ready)?;
+                            eprintln!("T11 after ready json");
                             phase(volume.require(), Stage::ScratchReady)?;
+                            eprintln!("T11 after require final");
                             Ok(())
                         })();
                         if let Err(primary) = result {
