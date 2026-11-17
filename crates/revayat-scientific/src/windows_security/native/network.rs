@@ -7,6 +7,7 @@ use std::time::Duration;
 #[link(name = "ws2_32")]
 unsafe extern "system" {
     fn getsockopt(socket: usize, level: i32, option: i32, value: *mut u8, length: *mut i32) -> i32;
+    fn setsockopt(socket: usize, level: i32, option: i32, value: *const u8, length: i32) -> i32;
 }
 
 pub(super) struct NetworkControls {
@@ -35,6 +36,18 @@ impl NetworkControls {
         let udp4 = UdpSocket::bind(("127.0.0.1", 0))?;
         let udp_port = udp4.local_addr()?.port();
         let udp6 = UdpSocket::bind(("::1", udp_port))?;
+        for socket in [tcp6.as_raw_socket(), udp6.as_raw_socket()] {
+            // std-created IPv6 sockets are dual-stack on Windows; the kernel
+            // contract requires genuinely IPv6-only controls, so set the
+            // option explicitly before verifying it below.
+            let value = 1i32;
+            let rc =
+                unsafe { setsockopt(socket as usize, 41, 27, (&value as *const i32).cast(), 4) };
+            eprintln!(
+                "T21 v6only set rc={rc} wsa={}",
+                std::io::Error::last_os_error().raw_os_error().unwrap_or(-1)
+            );
+        }
         for socket in [tcp6.as_raw_socket(), udp6.as_raw_socket()] {
             let mut value = 0i32;
             let mut length = 4i32;
