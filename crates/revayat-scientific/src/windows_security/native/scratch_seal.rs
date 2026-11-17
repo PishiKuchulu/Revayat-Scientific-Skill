@@ -438,9 +438,6 @@ fn token_evidence() -> u32 {
     value
 }
 
-/// Opens the exact held root for the DACL write. A pathname open is tried first; when it is
-/// refused, the held root object is reopened (no pathname rebind) and each candidate access is
-/// probed so a hosted refusal reports which right was denied, never raw text.
 #[link(name = "advapi32")]
 unsafe extern "system" {
     fn ConvertSecurityDescriptorToStringSecurityDescriptorW(
@@ -515,6 +512,9 @@ fn t4_dump(path: &Path, root: Handle) {
     }
 }
 
+/// Opens the exact held root for the DACL write. A pathname open is tried first; when it is
+/// refused, the held root object is reopened (no pathname rebind) and each candidate access is
+/// probed so a hosted refusal reports which right was denied, never raw text.
 fn open_writer(path: &Path, root: Handle, progress: &mut u32) -> Result<Owned> {
     let primary = match Owned::open(path, 0x00060080, 7, 0x02200000) {
         Ok(handle) => return Ok(handle),
