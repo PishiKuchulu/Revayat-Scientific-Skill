@@ -332,5 +332,8 @@ pub fn run_machine_kernel_session(image: &Path, view: &NativeRunView) -> Result<
         crate::runtime::with_cleanup(operation, closing),
         profile_cleanup,
     )
-    .map_err(wire::sanitize)
+    .map_err(|error| {
+        eprintln!("T20 kernel failure: {error:?}");
+        wire::sanitize(error)
+    })
 }
