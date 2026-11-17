@@ -359,6 +359,9 @@ pub fn run_machine_authority_session(image: &Path, view: &NativeRunView) -> Resu
             let mut failures = result.err().into_iter().collect::<Vec<_>>();
             failures.extend(closed.err());
             failures.extend(profile.err());
+            for failure in &failures {
+                eprintln!("T19 registry failure: {failure:?}");
+            }
             Err(wire::sanitize(if failures.len() == 1 {
                 failures.remove(0)
             } else {
