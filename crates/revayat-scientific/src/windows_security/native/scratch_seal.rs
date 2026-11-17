@@ -553,6 +553,61 @@ fn t4_dump(path: &Path, root: Handle) {
             }
         }
     }
+    // T6: bisect the scratch volume stack itself. A plain file object on the same volume, the
+    // volume device object's own descriptor, and a WRITE_DAC-only open through the volume GUID
+    // name separate object-type, device-object and path-form causes.
+    let file_probe = path.join(format!("rvy-t6-probe-{}.tmp", std::process::id()));
+    if std::fs::write(&file_probe, b"x").is_ok() {
+        let plain = match Owned::open(&file_probe, 0x0004_0000, 0x7, 0x0020_0000) {
+            Ok(mut handle) => {
+                let _ = handle.close();
+                0
+            }
+            Err(error) => error
+                .downcast_ref::<std::io::Error>()
+                .and_then(std::io::Error::raw_os_error)
+                .unwrap_or(-1),
+        };
+        let backup = match Owned::open(&file_probe, 0x0004_0000, 0x7, 0x0220_0000) {
+            Ok(mut handle) => {
+                let _ = handle.close();
+                0
+            }
+            Err(error) => error
+                .downcast_ref::<std::io::Error>()
+                .and_then(std::io::Error::raw_os_error)
+                .unwrap_or(-1),
+        };
+        eprintln!("T6 file plain={plain} backup={backup}");
+        let _ = std::fs::remove_file(&file_probe);
+    }
+    if let Some(text) = path.to_str()
+        && text.len() >= 2
+    {
+        let device = format!(r"\\.\{}", &text[..2]);
+        if let Ok(mut handle) = Owned::open(Path::new(&device), 0x0002_0000, 0x7, 0) {
+            dump("device_sddl", handle.0);
+            let _ = handle.close();
+        } else {
+            eprintln!("T6 device open_failed");
+        }
+    }
+    if let Some(volume) = path
+        .to_str()
+        .and_then(|text| super::layout::mounted(text).ok().flatten())
+    {
+        let code = match Owned::open(&volume, 0x0004_0000, 0x7, 0x0220_0000) {
+            Ok(mut handle) => {
+                let _ = handle.close();
+                0
+            }
+            Err(error) => error
+                .downcast_ref::<std::io::Error>()
+                .and_then(std::io::Error::raw_os_error)
+                .unwrap_or(-1),
+        };
+        eprintln!("T6 guid_root_dac_only={code}");
+    }
 }
 
 /// Opens the exact held root for the DACL write. A pathname open is tried first; when it is
