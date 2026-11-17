@@ -13,7 +13,6 @@ use std::{
     cell::RefCell,
     error::Error,
     fmt,
-    mem::size_of,
     path::{Path, PathBuf},
     ptr::null_mut,
     sync::Arc,
@@ -101,52 +100,94 @@ fn named_sddl(path: &PathBuf) -> String {
     value
 }
 
-/// T16 diagnostic: bisects which component of the creation descriptor the
-/// kernel rejects, using sibling directory names under the same parent.
-fn t16_ladder(path: &Path, host: &str, package: &str) {
-    fn attempt(target: &Path, descriptor: Option<&Descriptor>) -> i32 {
-        let text = wide(target);
-        let security = descriptor.map(|item| Security {
-            size: size_of::<Security>() as u32,
-            descriptor: item.0,
-            inherit: 0,
-        });
-        let pointer = security
-            .as_ref()
-            .map_or(std::ptr::null(), |item| item as *const Security);
-        if unsafe { CreateDirectoryW(text.as_ptr(), pointer) } != 0 {
-            0
-        } else {
-            std::io::Error::last_os_error().raw_os_error().unwrap_or(-1)
-        }
-    }
-    let base = path.to_string_lossy().into_owned();
-    let cases: [(&str, Option<String>); 6] = [
-        ("f-empty", Some("D:P".to_string())),
-        ("f-host", Some(format!("D:P(A;;FA;;;{host})"))),
-        ("f-package", Some(format!("D:P(A;;FA;;;{package})"))),
-        (
-            "f-host-ba",
-            Some(format!("D:P(A;;FA;;;{host})(A;;FA;;;BA)")),
-        ),
-        ("f-host-open", Some(format!("D:(A;;FA;;;{host})"))),
-        ("f-host-ga", Some(format!("D:P(A;;GA;;;{host})"))),
-    ];
-    for (name, sddl) in cases {
-        let target = PathBuf::from(format!("{base}-t17-{name}"));
-        let code = match &sddl {
-            None => attempt(&target, None),
-            Some(text) => match Descriptor::new(text) {
-                Ok(mut descriptor) => {
-                    let code = attempt(&target, Some(&descriptor));
-                    let _ = descriptor.close();
-                    code
-                }
-                Err(_) => -100,
-            },
-        };
-        eprintln!("T17 {name} error={code}");
-    }
+#[link(name = "advapi32")]
+unsafe extern "system" {
+    fn GetSecurityDescriptorOwner(
+        descriptor: Handle,
+        owner: *mut Handle,
+        defaulted: *mut i32,
+    ) -> i32;
+    fn GetSecurityDescriptorGroup(
+        descriptor: Handle,
+        group: *mut Handle,
+        defaulted: *mut i32,
+    ) -> i32;
+    fn GetSecurityDescriptorSacl(
+        descriptor: Handle,
+        present: *mut i32,
+        sacl: *mut Handle,
+        defaulted: *mut i32,
+    ) -> i32;
+    fn SetNamedSecurityInfoW(
+        path: *mut u16,
+        kind: i32,
+        fields: u32,
+        owner: Handle,
+        group: Handle,
+        dacl: Handle,
+        sacl: Handle,
+    ) -> u32;
+}
+#[link(name = "ntdll")]
+unsafe extern "system" {
+    fn NtSetSecurityObject(handle: Handle, fields: u32, data: *const std::ffi::c_void) -> i32;
+}
+
+/// Applies the private directory's descriptor after a bare create. A create
+/// carrying any descriptor is refused on the surfaced scratch volume, while
+/// the root seal's post-create setters are proven on the same stack: named
+/// owner/group and label writes, then the DACL through a handle. The caller
+/// verifies the landed policy before the directory is used.
+fn apply_created_policy(path: &Path, descriptor: &Descriptor) -> Result<()> {
+    let mut owner: Handle = null_mut();
+    let mut group: Handle = null_mut();
+    let mut sacl: Handle = null_mut();
+    let mut present = 0;
+    let mut defaulted = 0;
+    ensure!(
+        unsafe { GetSecurityDescriptorOwner(descriptor.0, &mut owner, &mut defaulted) } != 0
+            && unsafe { GetSecurityDescriptorGroup(descriptor.0, &mut group, &mut defaulted) } != 0
+            && unsafe {
+                GetSecurityDescriptorSacl(descriptor.0, &mut present, &mut sacl, &mut defaulted)
+            } != 0
+            && present != 0,
+        "private creator descriptor component extraction failed"
+    );
+    let _take = access::ManageVolume::acquire_optional("SeTakeOwnershipPrivilege")?;
+    let _restore = access::ManageVolume::acquire_optional("SeRestorePrivilege")?;
+    let mut text = wide(path);
+    let status = unsafe {
+        SetNamedSecurityInfoW(
+            text.as_mut_ptr(),
+            1,
+            0x3,
+            owner,
+            group,
+            null_mut(),
+            null_mut(),
+        )
+    };
+    ensure!(status == 0, "set private creator owner failed");
+    let status = unsafe {
+        SetNamedSecurityInfoW(
+            text.as_mut_ptr(),
+            1,
+            0x10,
+            null_mut(),
+            null_mut(),
+            null_mut(),
+            sacl,
+        )
+    };
+    ensure!(status == 0, "set private creator label failed");
+    let mut handle = Owned::open(path, 0x0006_0080, 7, 0x0220_0000)?;
+    let status = unsafe { NtSetSecurityObject(handle.0, 4, descriptor.0.cast_const()) };
+    let result = if status >= 0 {
+        Ok(())
+    } else {
+        Err(access::native_error("set private creator DACL"))
+    };
+    access::combine(result, handle.close())
 }
 
 fn shared<T>(result: Result<T>) -> scratch::OperationResult<T> {
@@ -241,17 +282,11 @@ impl PrivateCreator {
                 "O:{host}G:{host}D:P(A;;FA;;;{host})(A;;FA;;;{package})S:(ML;OICI;NW;;;LW)"
             ))?;
             let text = wide(&path);
-            let security = Security {
-                size: size_of::<Security>() as u32,
-                descriptor: descriptor.0,
-                inherit: 0,
-            };
-            let result = if unsafe { CreateDirectoryW(text.as_ptr(), &security) } != 0 {
-                Ok(())
+            let result = if unsafe { CreateDirectoryW(text.as_ptr(), std::ptr::null()) } != 0 {
+                apply_created_policy(&path, &descriptor)
             } else {
                 let code = std::io::Error::last_os_error().raw_os_error().unwrap_or(-1);
                 eprintln!("T14 create dir error={code}");
-                t16_ladder(&path, host, package);
                 Err(access::native_error("create private creator directory"))
             };
             access::combine(result, descriptor.close())?;
