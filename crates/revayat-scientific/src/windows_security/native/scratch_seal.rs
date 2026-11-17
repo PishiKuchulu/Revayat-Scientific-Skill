@@ -448,6 +448,24 @@ unsafe extern "system" {
         length: *mut u32,
     ) -> i32;
     fn IsTokenRestricted(token: Handle) -> i32;
+    fn AccessCheck(
+        descriptor: *const std::ffi::c_void,
+        token: Handle,
+        desired: u32,
+        mapping: *const u32,
+        privilege_set: *mut u8,
+        privilege_set_length: *mut u32,
+        granted: *mut u32,
+        status: *mut i32,
+    ) -> i32;
+    fn DuplicateTokenEx(
+        existing: Handle,
+        desired: u32,
+        attributes: *const std::ffi::c_void,
+        level: i32,
+        kind: i32,
+        new_token: *mut Handle,
+    ) -> i32;
 }
 #[link(name = "kernel32")]
 unsafe extern "system" {
@@ -607,6 +625,65 @@ fn t4_dump(path: &Path, root: Handle) {
                 .unwrap_or(-1),
         };
         eprintln!("T6 guid_root_dac_only={code}");
+    }
+    // T7: ask the reference monitor itself. AccessCheck evaluates the exact root and device
+    // descriptors against an impersonation copy of this process token, offline from any
+    // filter or device stack; the C: volume device descriptor is the control.
+    if let Ok(mut control) = Owned::open(Path::new(r"\\.\C:"), 0x0002_0000, 0x7, 0) {
+        dump("c_device_sddl", control.0);
+        let _ = control.close();
+    } else {
+        eprintln!("T7 c_device open_failed");
+    }
+    let mut primary: Handle = null_mut();
+    if unsafe { OpenProcessToken(GetCurrentProcess(), 0xA, &mut primary) } != 0
+        && !primary.is_null()
+    {
+        let mut token: Handle = null_mut();
+        if unsafe { DuplicateTokenEx(primary, 0xF01FF, null_mut(), 2, 2, &mut token) } != 0
+            && !token.is_null()
+        {
+            let mapping: [u32; 4] = [0x0012_0089, 0x0012_0116, 0x0012_00A0, 0x001F_01FF];
+            let check = |label: &str, raw: &[u8]| {
+                let mut privileges = [0u8; 256];
+                let mut length = privileges.len() as u32;
+                let mut granted = 0u32;
+                let mut status = 0i32;
+                let called = unsafe {
+                    AccessCheck(
+                        raw.as_ptr().cast(),
+                        token,
+                        0x0200_0000,
+                        mapping.as_ptr(),
+                        privileges.as_mut_ptr(),
+                        &mut length,
+                        &mut granted,
+                        &mut status,
+                    )
+                };
+                eprintln!(
+                    "T7 access {label} called={called} status={status} granted=0x{granted:08X}"
+                );
+            };
+            if let Ok(raw) = access::security(root, 0x17) {
+                check("root", &raw);
+            }
+            if let Some(text) = path.to_str()
+                && text.len() >= 2
+            {
+                let device = format!(r"\\.\{}", &text[..2]);
+                if let Ok(mut handle) = Owned::open(Path::new(&device), 0x0002_0000, 0x7, 0) {
+                    if let Ok(raw) = access::security(handle.0, 0x17) {
+                        check("device", &raw);
+                    }
+                    let _ = handle.close();
+                }
+            }
+            let mut owned = Owned(token);
+            let _ = owned.close();
+        }
+        let mut owned = Owned(primary);
+        let _ = owned.close();
     }
 }
 
