@@ -121,22 +121,19 @@ fn t16_ladder(path: &Path, host: &str, package: &str) {
         }
     }
     let base = path.to_string_lossy().into_owned();
-    let dacl = format!("D:P(A;;FA;;;{host})(A;;FA;;;{package})");
-    let cases: [(&str, Option<String>); 5] = [
-        ("a-null", None),
-        ("b-dacl", Some(dacl.clone())),
-        ("c-dacl-sacl", Some(format!("{dacl}S:(ML;OICI;NW;;;LW)"))),
+    let cases: [(&str, Option<String>); 6] = [
+        ("f-empty", Some("D:P".to_string())),
+        ("f-host", Some(format!("D:P(A;;FA;;;{host})"))),
+        ("f-package", Some(format!("D:P(A;;FA;;;{package})"))),
         (
-            "d-owner-group-dacl",
-            Some(format!("O:{host}G:{host}{dacl}")),
+            "f-host-ba",
+            Some(format!("D:P(A;;FA;;;{host})(A;;FA;;;BA)")),
         ),
-        (
-            "e-owner-dacl-sacl",
-            Some(format!("O:{host}{dacl}S:(ML;OICI;NW;;;LW)")),
-        ),
+        ("f-host-open", Some(format!("D:(A;;FA;;;{host})"))),
+        ("f-host-ga", Some(format!("D:P(A;;GA;;;{host})"))),
     ];
     for (name, sddl) in cases {
-        let target = PathBuf::from(format!("{base}-t16-{name}"));
+        let target = PathBuf::from(format!("{base}-t17-{name}"));
         let code = match &sddl {
             None => attempt(&target, None),
             Some(text) => match Descriptor::new(text) {
@@ -148,7 +145,7 @@ fn t16_ladder(path: &Path, host: &str, package: &str) {
                 Err(_) => -100,
             },
         };
-        eprintln!("T16 {name} error={code}");
+        eprintln!("T17 {name} error={code}");
     }
 }
 
