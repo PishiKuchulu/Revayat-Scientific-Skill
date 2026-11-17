@@ -201,10 +201,12 @@ impl PrivateCreator {
             let result = if unsafe { CreateDirectoryW(text.as_ptr(), &security) } != 0 {
                 Ok(())
             } else {
+                let code = std::io::Error::last_os_error().raw_os_error().unwrap_or(-1);
+                eprintln!("T14 create dir error={code}");
                 Err(access::native_error("create private creator directory"))
             };
-            eprintln!("T12 private dir created");
             access::combine(result, descriptor.close())?;
+            eprintln!("T12 private dir created");
             let mut pin = match Owned::open(&path, 0x20081, 3, 0x2200000) {
                 Ok(pin) => pin,
                 Err(error) => {
