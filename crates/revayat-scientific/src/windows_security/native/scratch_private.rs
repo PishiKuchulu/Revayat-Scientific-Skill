@@ -103,8 +103,8 @@ fn named_sddl(path: &PathBuf) -> String {
 
 /// T16 diagnostic: bisects which component of the creation descriptor the
 /// kernel rejects, using sibling directory names under the same parent.
-fn t16_ladder(path: &PathBuf, host: &str, package: &str) {
-    fn attempt(target: &PathBuf, descriptor: Option<&Descriptor>) -> i32 {
+fn t16_ladder(path: &Path, host: &str, package: &str) {
+    fn attempt(target: &Path, descriptor: Option<&Descriptor>) -> i32 {
         let text = wide(target);
         let security = descriptor.map(|item| Security {
             size: size_of::<Security>() as u32,
