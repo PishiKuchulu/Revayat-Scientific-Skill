@@ -441,6 +441,80 @@ fn token_evidence() -> u32 {
 /// Opens the exact held root for the DACL write. A pathname open is tried first; when it is
 /// refused, the held root object is reopened (no pathname rebind) and each candidate access is
 /// probed so a hosted refusal reports which right was denied, never raw text.
+#[link(name = "advapi32")]
+unsafe extern "system" {
+    fn ConvertSecurityDescriptorToStringSecurityDescriptorW(
+        descriptor: *const std::ffi::c_void,
+        revision: u32,
+        fields: u32,
+        output: *mut *mut u16,
+        length: *mut u32,
+    ) -> i32;
+    fn IsTokenRestricted(token: Handle) -> i32;
+}
+#[link(name = "kernel32")]
+unsafe extern "system" {
+    fn LocalFree(memory: Handle) -> Handle;
+}
+
+/// Fork-only T4 diagnostic: prints the held root's descriptor and a fresh child's
+/// descriptor as SDDL, plus the process token's restriction state. Never admits a run.
+fn t4_dump(path: &Path, root: Handle) {
+    let dump = |label: &str, handle: Handle| {
+        if let Ok(raw) = access::security(handle, 0x17) {
+            let mut text: *mut u16 = null_mut();
+            let mut length = 0u32;
+            // SAFETY: the descriptor copy stays live; the converted string is freed below.
+            let converted = unsafe {
+                ConvertSecurityDescriptorToStringSecurityDescriptorW(
+                    raw.as_ptr().cast(),
+                    1,
+                    0x17,
+                    &mut text,
+                    &mut length,
+                )
+            };
+            if converted != 0 && !text.is_null() {
+                let mut count = 0usize;
+                // SAFETY: the converted string is NUL-terminated; the scan is bounded.
+                while count < 16384 && unsafe { *text.add(count) } != 0 {
+                    count += 1;
+                }
+                let units = unsafe { std::slice::from_raw_parts(text, count) };
+                eprintln!("T4 {label} {}", String::from_utf16_lossy(units));
+                // SAFETY: the string came from the converter and is released once.
+                unsafe { LocalFree(text.cast()) };
+            } else {
+                eprintln!("T4 {label} convert_failed");
+            }
+        } else {
+            eprintln!("T4 {label} read_failed");
+        }
+    };
+    dump("root_sddl", root);
+    let child = path.join(format!("rvy-t4-probe-{}", std::process::id()));
+    if std::fs::create_dir(&child).is_ok() {
+        if let Ok(mut probe) = Owned::open(&child, 0x00020000, 7, 0x02200000) {
+            dump("child_sddl", probe.0);
+            let _ = probe.close();
+        } else {
+            eprintln!("T4 child_sddl open_failed");
+        }
+        let _ = std::fs::remove_dir(&child);
+    }
+    let mut token: Handle = null_mut();
+    // SAFETY: pseudo process handle; the opened token is closed through `Owned` below.
+    if unsafe { OpenProcessToken(GetCurrentProcess(), 8, &mut token) } != 0 && !token.is_null() {
+        // SAFETY: the token handle is live for this query.
+        let restricted = unsafe { IsTokenRestricted(token) };
+        eprintln!("T4 token restricted={restricted}");
+        let mut owned = Owned(token);
+        let _ = owned.close();
+    } else {
+        eprintln!("T4 token open_failed");
+    }
+}
+
 fn open_writer(path: &Path, root: Handle, progress: &mut u32) -> Result<Owned> {
     let primary = match Owned::open(path, 0x00060080, 7, 0x02200000) {
         Ok(handle) => return Ok(handle),
@@ -586,6 +660,7 @@ pub(super) fn set_root_security(
                 }
             };
             if result.is_err() && fields & 4 != 0 {
+                t4_dump(path, root);
                 // Diagnostic only: readback cannot replace the failed setter/open or admit a run.
                 let readback = access::dacl_matches(root, descriptor.0).ok();
                 numbers.count = Some(

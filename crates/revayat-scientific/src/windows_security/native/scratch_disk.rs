@@ -629,9 +629,9 @@ pub(super) fn filesystem(root: &str) -> Result<(u32, u64)> {
 fn seal_root(drive_root: &str, root: super::Handle, intent: &Intent) -> Result<()> {
     let path = Path::new(drive_root);
     for (sddl, fields, stage) in [
-        (root_policy(intent), 0x80000004, Stage::ScratchSealDacl),
         (format!("O:{}", intent.host), 0x1, Stage::ScratchSealOwner),
         ("S:(ML;OICI;NW;;;LW)".into(), 0x10, Stage::ScratchSealLabel),
+        (root_policy(intent), 0x80000004, Stage::ScratchSealDacl),
     ] {
         set_root_security(path, root, &sddl, fields, stage)?;
     }
