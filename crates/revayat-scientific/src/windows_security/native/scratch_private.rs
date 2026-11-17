@@ -30,6 +30,77 @@ impl Error for PortableFailure {
         Some(self.0.as_ref())
     }
 }
+#[link(name = "advapi32")]
+unsafe extern "system" {
+    fn GetNamedSecurityInfoW(
+        path: *const u16,
+        kind: i32,
+        information: u32,
+        owner: *mut *mut std::ffi::c_void,
+        group: *mut *mut std::ffi::c_void,
+        dacl: *mut *mut std::ffi::c_void,
+        sacl: *mut *mut std::ffi::c_void,
+        descriptor: *mut *mut std::ffi::c_void,
+    ) -> u32;
+    fn ConvertSecurityDescriptorToStringSecurityDescriptorW(
+        descriptor: *const std::ffi::c_void,
+        revision: u32,
+        fields: u32,
+        output: *mut *mut u16,
+        length: *mut u32,
+    ) -> i32;
+}
+#[link(name = "kernel32")]
+unsafe extern "system" {
+    fn LocalFree(value: Handle) -> Handle;
+}
+
+/// T13 diagnostic: reads back the created directory's descriptor by name.
+fn named_sddl(path: &PathBuf) -> String {
+    let text = wide(path);
+    let mut descriptor: *mut std::ffi::c_void = null_mut();
+    let rc = unsafe {
+        GetNamedSecurityInfoW(
+            text.as_ptr(),
+            1,
+            0x7,
+            null_mut(),
+            null_mut(),
+            null_mut(),
+            null_mut(),
+            &mut descriptor,
+        )
+    };
+    if rc != 0 || descriptor.is_null() {
+        return format!("named_rc={rc}");
+    }
+    let mut output: *mut u16 = null_mut();
+    let mut length = 0u32;
+    let ok = unsafe {
+        ConvertSecurityDescriptorToStringSecurityDescriptorW(
+            descriptor,
+            1,
+            0x7,
+            &mut output,
+            &mut length,
+        )
+    };
+    let value = if ok == 0 || output.is_null() {
+        "convert_failed".to_string()
+    } else {
+        let slice = unsafe { std::slice::from_raw_parts(output, length as usize) };
+        let end = slice.iter().position(|&c| c == 0).unwrap_or(slice.len());
+        String::from_utf16_lossy(&slice[..end])
+    };
+    unsafe {
+        if !output.is_null() {
+            LocalFree(output.cast());
+        }
+        LocalFree(descriptor);
+    }
+    value
+}
+
 fn shared<T>(result: Result<T>) -> scratch::OperationResult<T> {
     result.map_err(|error| Arc::from(error.into_boxed_dyn_error()))
 }
@@ -134,7 +205,17 @@ impl PrivateCreator {
             };
             eprintln!("T12 private dir created");
             access::combine(result, descriptor.close())?;
-            let mut pin = Owned::open(&path, 0x20081, 3, 0x2200000)?;
+            let mut pin = match Owned::open(&path, 0x20081, 3, 0x2200000) {
+                Ok(pin) => pin,
+                Err(error) => {
+                    let code = error
+                        .downcast_ref::<std::io::Error>()
+                        .and_then(std::io::Error::raw_os_error)
+                        .unwrap_or(-1);
+                    eprintln!("T13 pin open error={code} sddl={}", named_sddl(&path));
+                    return Err(error);
+                }
+            };
             eprintln!("T12 private dir pinned");
             let result = (|| {
                 let id = access::identity(pin.0, true)?;
