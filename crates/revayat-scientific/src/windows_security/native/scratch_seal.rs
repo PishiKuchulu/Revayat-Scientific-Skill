@@ -41,6 +41,14 @@ unsafe extern "system" {
 #[link(name = "ntdll")]
 unsafe extern "system" {
     fn NtSetSecurityObject(handle: Handle, fields: u32, data: *const std::ffi::c_void) -> i32;
+    fn NtOpenFile(
+        handle: *mut Handle,
+        access: u32,
+        attributes: *const std::ffi::c_void,
+        io: Handle,
+        share: u32,
+        options: u32,
+    ) -> i32;
     fn RtlNtStatusToDosError(status: i32) -> u32;
 }
 #[link(name = "kernel32")]
@@ -687,6 +695,32 @@ fn t4_dump(path: &Path, root: Handle) {
     }
 }
 
+/// Reopens the held root directory relative to its own handle with the DACL writer access.
+/// The empty relative name denotes the root directory object itself.
+fn reopen_relative(root: Handle) -> std::result::Result<Owned, u32> {
+    // OBJECT_ATTRIBUTES is six pointer-sized words: length, root directory, name pointer,
+    // attributes, descriptor, quality of service. The name is an empty UNICODE_STRING.
+    let name: [usize; 2] = [0, 0];
+    let attributes: [usize; 6] = [48, root as usize, name.as_ptr() as usize, 0x40, 0, 0];
+    let mut io: [usize; 2] = [0, 0];
+    let mut handle: Handle = null_mut();
+    // SAFETY: the held root handle is live; the attribute and status buffers outlive the call.
+    let status = unsafe {
+        NtOpenFile(
+            &mut handle,
+            0x0006_0080,
+            attributes.as_ptr().cast(),
+            io.as_mut_ptr().cast(),
+            7,
+            0x0000_4001,
+        )
+    };
+    if status < 0 || handle.is_null() {
+        return Err(status as u32);
+    }
+    Ok(Owned(handle))
+}
+
 /// Opens the exact held root for the DACL write. A pathname open is tried first; when it is
 /// refused, the held root object is reopened (no pathname rebind) and each candidate access is
 /// probed so a hosted refusal reports which right was denied, never raw text.
@@ -695,6 +729,16 @@ fn open_writer(path: &Path, root: Handle, progress: &mut u32) -> Result<Owned> {
         Ok(handle) => return Ok(handle),
         Err(error) => error,
     };
+    // T8 experiment: reopen the held root relative to itself. Named opens traverse the
+    // surfaced volume device, whose own descriptor grants WRITE_DAC only to SYSTEM and the
+    // built-in Administrator; a relative open starts from the already-held root handle.
+    match reopen_relative(root) {
+        Ok(handle) => {
+            *progress |= 0x4000;
+            return Ok(handle);
+        }
+        Err(status) => eprintln!("T8 relative status=0x{status:08X}"),
+    }
     for (bit, access, flags) in [
         (0x100, 0x00040000, 0x02200000),
         (0x200, 0x00040000, 0x00200000),
