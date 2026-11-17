@@ -542,7 +542,10 @@ fn t4_dump(path: &Path, root: Handle) {
                             let _ = handle.close();
                             0
                         }
-                        Err(error) => error.raw_os_error().unwrap_or(-1),
+                        Err(error) => error
+                            .downcast_ref::<std::io::Error>()
+                            .and_then(std::io::Error::raw_os_error)
+                            .unwrap_or(-1),
                     };
                     eprintln!("T5 replica set_rc={rc} open={code}");
                     let _ = std::fs::remove_dir(&replica);
@@ -604,7 +607,7 @@ fn set_dacl(
     // pathname setter. FILE_READ_ATTRIBUTES is requested explicitly for the identity bind.
     // T5 (fork-only experiment): the canonical backup/restore pair enables SeBackupPrivilege
     // alongside the caller's SeRestorePrivilege for the writer open.
-    let mut backup = access::ManageVolume::acquire_optional("SeBackupPrivilege")?;
+    let backup = access::ManageVolume::acquire_optional("SeBackupPrivilege")?;
     eprintln!("T5 backup_acquired={}", u8::from(backup.is_some()));
     let mut target = open_writer(path, root, progress)?;
     *progress |= 0x10;
