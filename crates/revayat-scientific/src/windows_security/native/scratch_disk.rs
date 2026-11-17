@@ -326,7 +326,7 @@ impl ScratchVolume {
                 // Administrators group full access, matching a normally mounted volume, so
                 // the volume device check no longer strips WRITE_DAC from the seal.
                 let mut device_descriptor = super::authority::Descriptor::new(
-                    "O:BAG:SYD:(A;;FX;;;WD)(A;;FA;;;SY)(A;;FA;;;BA)(A;;FX;;;RC)",
+                    "D:(A;;FX;;;WD)(A;;FA;;;SY)(A;;FA;;;BA)(A;;FX;;;RC)",
                 )?;
                 let status = unsafe {
                     AttachVirtualDisk(
@@ -340,6 +340,7 @@ impl ScratchVolume {
                     )
                 };
                 let _ = device_descriptor.close();
+                eprintln!("T9 attach status={}", status.0);
                 if status.0 != 0 {
                     return Err(diagnostics::operation(
                         std::io::Error::from_raw_os_error(status.0 as i32).into(),
