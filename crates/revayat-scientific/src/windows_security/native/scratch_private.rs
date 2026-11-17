@@ -101,6 +101,57 @@ fn named_sddl(path: &PathBuf) -> String {
     value
 }
 
+/// T16 diagnostic: bisects which component of the creation descriptor the
+/// kernel rejects, using sibling directory names under the same parent.
+fn t16_ladder(path: &PathBuf, host: &str, package: &str) {
+    fn attempt(target: &PathBuf, descriptor: Option<&Descriptor>) -> i32 {
+        let text = wide(target);
+        let security = descriptor.map(|item| Security {
+            size: size_of::<Security>() as u32,
+            descriptor: item.0,
+            inherit: 0,
+        });
+        let pointer = security
+            .as_ref()
+            .map_or(std::ptr::null(), |item| item as *const Security);
+        if unsafe { CreateDirectoryW(text.as_ptr(), pointer) } != 0 {
+            0
+        } else {
+            std::io::Error::last_os_error().raw_os_error().unwrap_or(-1)
+        }
+    }
+    let base = path.to_string_lossy().into_owned();
+    let dacl = format!("D:P(A;;FA;;;{host})(A;;FA;;;{package})");
+    let cases: [(&str, Option<String>); 5] = [
+        ("a-null", None),
+        ("b-dacl", Some(dacl.clone())),
+        ("c-dacl-sacl", Some(format!("{dacl}S:(ML;OICI;NW;;;LW)"))),
+        (
+            "d-owner-group-dacl",
+            Some(format!("O:{host}G:{host}{dacl}")),
+        ),
+        (
+            "e-owner-dacl-sacl",
+            Some(format!("O:{host}{dacl}S:(ML;OICI;NW;;;LW)")),
+        ),
+    ];
+    for (name, sddl) in cases {
+        let target = PathBuf::from(format!("{base}-t16-{name}"));
+        let code = match &sddl {
+            None => attempt(&target, None),
+            Some(text) => match Descriptor::new(text) {
+                Ok(mut descriptor) => {
+                    let code = attempt(&target, Some(&descriptor));
+                    let _ = descriptor.close();
+                    code
+                }
+                Err(_) => -100,
+            },
+        };
+        eprintln!("T16 {name} error={code}");
+    }
+}
+
 fn shared<T>(result: Result<T>) -> scratch::OperationResult<T> {
     result.map_err(|error| Arc::from(error.into_boxed_dyn_error()))
 }
@@ -198,29 +249,15 @@ impl PrivateCreator {
                 descriptor: descriptor.0,
                 inherit: 0,
             };
-            let mut guard = None;
-            let mut result = if unsafe { CreateDirectoryW(text.as_ptr(), &security) } != 0 {
+            let result = if unsafe { CreateDirectoryW(text.as_ptr(), &security) } != 0 {
                 Ok(())
             } else {
                 let code = std::io::Error::last_os_error().raw_os_error().unwrap_or(-1);
                 eprintln!("T14 create dir error={code}");
+                t16_ladder(&path, host, package);
                 Err(access::native_error("create private creator directory"))
             };
-            if result.is_err() {
-                // T15 experiment: creating a directory with a SACL requires
-                // SeSecurityPrivilege; enable it and retry the identical create.
-                guard = access::ManageVolume::acquire_optional("SeSecurityPrivilege")?;
-                eprintln!("T15 security_priv={}", u8::from(guard.is_some()));
-                result = if unsafe { CreateDirectoryW(text.as_ptr(), &security) } != 0 {
-                    Ok(())
-                } else {
-                    let code = std::io::Error::last_os_error().raw_os_error().unwrap_or(-1);
-                    eprintln!("T15 create retry error={code}");
-                    Err(access::native_error("create private creator directory"))
-                };
-            }
             access::combine(result, descriptor.close())?;
-            drop(guard);
             eprintln!("T12 private dir created");
             let mut pin = match Owned::open(&path, 0x20081, 3, 0x2200000) {
                 Ok(pin) => pin,
