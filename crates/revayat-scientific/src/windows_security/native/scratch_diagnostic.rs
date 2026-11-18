@@ -646,6 +646,7 @@ fn policy_probe(
                 )
             };
             let mut status = -1i32;
+            let mut open_error = 0u32;
             if converted != 0 && !raw.is_null() {
                 let path = wide(&dir);
                 let handle = unsafe {
@@ -664,13 +665,15 @@ fn policy_probe(
                     unsafe {
                         CloseHandle(handle);
                     }
+                } else {
+                    open_error = unsafe { GetLastError() };
                 }
                 unsafe {
                     LocalFree(raw);
                 }
             }
             eprintln!(
-                "T69 setup v{} made={} converted={converted} status=0x{status:08X}",
+                "T69 setup v{} made={} converted={converted} open_err={open_error} status=0x{status:08X}",
                 index + 1,
                 made.is_ok()
             );
