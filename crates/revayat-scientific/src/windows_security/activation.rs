@@ -134,7 +134,12 @@ fn finish(mut errors: Vec<anyhow::Error>) -> Result<()> {
     match errors.len() {
         0 => Ok(()),
         1 => Err(errors.remove(0)),
-        _ => Err(Failures { errors }.into()),
+        _ => {
+            for (index, error) in errors.iter().enumerate() {
+                eprintln!("T27 failure[{index}]: {error:?}");
+            }
+            Err(Failures { errors }.into())
+        }
     }
 }
 pub fn finalize_comparison<'a>(
