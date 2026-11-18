@@ -149,11 +149,11 @@ pub(super) fn open(
     flags: u32,
     security: *const Security,
 ) -> Result<Owned> {
-    let path = wide(path);
+    let path_w = wide(path);
     // SAFETY: bounded fixed plan path, live optional security and no template handle.
-    Owned::new(unsafe {
+    let raw = unsafe {
         CreateFileW(
-            path.as_ptr(),
+            path_w.as_ptr(),
             access,
             share,
             security,
@@ -161,7 +161,14 @@ pub(super) fn open(
             flags,
             null_mut(),
         )
-    })
+    };
+    if raw.is_null() || raw as isize == -1 {
+        eprintln!(
+            "T57 open failed: path={path} access=0x{access:08X} creation={creation} flags=0x{flags:08X} last_error={}",
+            unsafe { GetLastError() }
+        );
+    }
+    Owned::new(raw)
 }
 #[link(name = "kernel32")]
 unsafe extern "system" {
