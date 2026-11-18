@@ -226,6 +226,102 @@ pub(super) fn identity(handle: Handle, directory: bool) -> Result<Identity> {
             "T39 probe class18 size24: rc={rc_id} raw_os_error={:?}",
             std::io::Error::last_os_error().raw_os_error()
         );
+        #[link(name = "kernel32")]
+        unsafe extern "system" {
+            fn GetCurrentThread() -> Handle;
+        }
+        #[link(name = "advapi32")]
+        unsafe extern "system" {
+            fn OpenThreadToken(
+                thread: Handle,
+                access: u32,
+                self_open: i32,
+                token: *mut Handle,
+            ) -> i32;
+            fn GetTokenInformation(
+                token: Handle,
+                class: i32,
+                data: Handle,
+                size: u32,
+                returned: *mut u32,
+            ) -> i32;
+            fn ConvertSidToStringSidW(sid: Handle, text: *mut *mut u16) -> i32;
+        }
+        unsafe {
+            let mut token = null_mut();
+            let rc = OpenThreadToken(GetCurrentThread(), 8, 1, &mut token);
+            if rc == 0 {
+                eprintln!(
+                    "T40 thread token: none (not impersonating) raw_os_error={:?}",
+                    std::io::Error::last_os_error().raw_os_error()
+                );
+            } else {
+                let mut data = vec![0usize; 64];
+                let mut returned = 0;
+                let grc =
+                    GetTokenInformation(token, 1, data.as_mut_ptr().cast(), 512, &mut returned);
+                if grc != 0 {
+                    let sid = data.as_ptr().cast::<Handle>().read();
+                    let mut text = null_mut();
+                    if ConvertSidToStringSidW(sid, &mut text) != 0 && !text.is_null() {
+                        let mut length = 0;
+                        while text.add(length).read() != 0 {
+                            length += 1;
+                        }
+                        eprintln!(
+                            "T40 thread token: IMPERSONATING user={}",
+                            String::from_utf16_lossy(std::slice::from_raw_parts(text, length))
+                        );
+                        LocalFree(text.cast());
+                    } else {
+                        eprintln!("T40 thread token: impersonating, SID unreadable");
+                    }
+                } else {
+                    eprintln!("T40 thread token: impersonating, user query failed");
+                }
+                let _ = Owned::checked(token).map(|mut owned| owned.close());
+            }
+            let mut dos = [0u16; 512];
+            let length = GetFinalPathNameByHandleW(handle, dos.as_mut_ptr(), 512, 0) as usize;
+            if length > 0 && length < 512 {
+                let dos_path = String::from_utf16_lossy(&dos[..length]);
+                match Owned::open(&dos_path, 0x80, 7, 0x2200000) {
+                    Ok(mut fresh) => {
+                        let mut probe = Attributes::default();
+                        let frc = GetFileInformationByHandleEx(
+                            fresh.0,
+                            9,
+                            (&mut probe as *mut Attributes).cast(),
+                            8,
+                        );
+                        eprintln!(
+                            "T40 fresh open class9: rc={frc} raw_os_error={:?} path={dos_path}",
+                            std::io::Error::last_os_error().raw_os_error()
+                        );
+                        let _ = fresh.close();
+                    }
+                    Err(error) => {
+                        eprintln!("T40 fresh open failed: {error:?} path={dos_path}");
+                    }
+                }
+            } else {
+                eprintln!("T40 DOS name unavailable length={length}");
+            }
+            if let Ok(mut good) = Owned::open("C:\\", 0x80, 7, 0x2200000) {
+                let mut probe = Attributes::default();
+                let grc = GetFileInformationByHandleEx(
+                    good.0,
+                    9,
+                    (&mut probe as *mut Attributes).cast(),
+                    8,
+                );
+                eprintln!(
+                    "T40 known-good C:\\ class9: rc={grc} raw_os_error={:?}",
+                    std::io::Error::last_os_error().raw_os_error()
+                );
+                let _ = good.close();
+            }
+        }
     }
     ensure!(attr_rc != 0, "scratch attributes query failed");
     ensure!(
