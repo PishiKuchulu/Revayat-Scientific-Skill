@@ -356,9 +356,19 @@ impl<'a> NativeCompletion<'a> {
             )
         };
         let mut failures = Vec::new();
+        eprintln!(
+            "T49 close_capture: error={error} pre_len={} pre_eof={}",
+            capture.bytes.len(),
+            capture.eof
+        );
         if reader.0.is_null() {
             capture.end();
         } else if let Err(error) = drain(reader, capture, limit) {
+            eprintln!(
+                "T49 close_capture drain failed: {error:?} post_len={} post_eof={}",
+                capture.bytes.len(),
+                capture.eof
+            );
             failures.push(error);
         }
         if let Some(retain) = retain.as_mut() {
