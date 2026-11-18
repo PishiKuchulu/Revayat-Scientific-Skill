@@ -499,14 +499,19 @@ fn policy_probe(
     // T64 prep: raw descriptors for offline AccessCheck under impersonation.
     let root_sd = access::security(refs.root.0, 0x17).unwrap_or_default();
     let device_sd = {
-        let device = format!(r"\\.\{}", volume.drive());
-        match access::Owned::open(Path::new(&device), 0x0002_0000, 0x7, 0) {
-            Ok(mut handle) => {
-                let bytes = access::security(handle.0, 0x17).unwrap_or_default();
-                let _ = handle.close();
-                bytes
+        let root = volume.drive_root();
+        if root.len() >= 2 {
+            let device = format!(r"\\.\{}", &root[..2]);
+            match access::Owned::open(std::path::Path::new(&device), 0x0002_0000, 0x7, 0) {
+                Ok(mut handle) => {
+                    let bytes = access::security(handle.0, 0x17).unwrap_or_default();
+                    let _ = handle.close();
+                    bytes
+                }
+                Err(_) => Vec::new(),
             }
-            Err(_) => Vec::new(),
+        } else {
+            Vec::new()
         }
     };
     let mut dirs = [
