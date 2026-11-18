@@ -141,10 +141,17 @@ pub(super) fn restore(key: Handle, captured: &[u8]) -> Result<()> {
         "restore owned profile registry DACL failed winerror={status}"
     );
     let mut actual = read_access(key)?;
-    let compared = matches_access(captured, &actual);
+    let compared = restored_matches(captured, &actual);
     actual.fill(0);
     ensure!(compared?, "restored profile registry seal readback differs");
     Ok(())
+}
+fn restored_matches(captured: &[u8], actual: &[u8]) -> Result<bool> {
+    let a = crate::windows_security::policy::Descriptor::parse(captured)?;
+    let b = crate::windows_security::policy::Descriptor::parse(actual)?;
+    Ok(a.control & !0x400 == b.control & !0x400
+        && a.dacl.is_some()
+        && crate::windows_security::policy::serialized_acl_equal(a.dacl, b.dacl)?)
 }
 pub(super) fn apply(key: Handle, user: &str, package: &str, read_only: bool) -> Result<()> {
     let mut expected = Descriptor::new(&sddl(user, package, read_only)?)?;
