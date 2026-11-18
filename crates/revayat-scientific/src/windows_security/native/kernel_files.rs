@@ -22,8 +22,16 @@ pub(super) fn environment(plan: &KernelPlan) -> Result<()> {
             "kernel environment contains case-alias names"
         );
     }
+    let expected = plan.environment()?;
+    if actual != expected || actual.len() != 13 || actual.contains_key("SCIENTIFIC_AMBIENT_CANARY")
+    {
+        eprintln!(
+            "T45 environment diff: actual_len={} actual={actual:?} expected={expected:?}",
+            actual.len()
+        );
+    }
     ensure!(
-        actual == plan.environment()?
+        actual == expected
             && actual.len() == 13
             && !actual.contains_key("SCIENTIFIC_AMBIENT_CANARY"),
         "kernel exact environment differs from closed plan"
