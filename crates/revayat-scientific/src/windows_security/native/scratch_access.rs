@@ -196,12 +196,17 @@ pub(super) fn identity(handle: Handle, directory: bool) -> Result<Identity> {
         low: 0,
         high: 0,
     };
-    ensure!(
-        unsafe {
-            GetFileInformationByHandleEx(handle, 9, (&mut attributes as *mut Attributes).cast(), 8)
-        } != 0,
-        "scratch attributes query failed"
-    );
+    let attr_rc = unsafe {
+        GetFileInformationByHandleEx(handle, 9, (&mut attributes as *mut Attributes).cast(), 8)
+    };
+    if attr_rc == 0 {
+        eprintln!(
+            "T38 identity attributes query failed: directory={directory} raw_os_error={:?} name={:?}",
+            std::io::Error::last_os_error().raw_os_error(),
+            name(handle)
+        );
+    }
+    ensure!(attr_rc != 0, "scratch attributes query failed");
     ensure!(
         attributes.attributes & 0x410 == if directory { 0x10 } else { 0 } && attributes.tag == 0,
         "scratch object type or reparse tag differs"
