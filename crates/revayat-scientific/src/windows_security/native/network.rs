@@ -52,18 +52,6 @@ fn v6_socket(kind: i32, protocol: i32, port: u16) -> Result<usize> {
         }
         anyhow::bail!("host IPv6 kernel control could not be bound IPv6-only");
     }
-    let mut read_value = -1i32;
-    let mut read_length = 4i32;
-    let read_rc = unsafe {
-        getsockopt(
-            created,
-            41,
-            27,
-            (&mut read_value as *mut i32).cast(),
-            &mut read_length,
-        )
-    };
-    eprintln!("T23 v6_socket kind={kind} read_rc={read_rc} len={read_length} value={read_value}");
     Ok(created)
 }
 
@@ -121,9 +109,16 @@ impl NetworkControls {
                     &mut length,
                 )
             };
-            eprintln!("T23 verify rc={rc} len={length} value={value}");
+            // Winsock reports this boolean as a DWORD for TCP sockets but
+            // as a single byte for UDP sockets; either representation must
+            // still encode exactly `1` (IPv6-only).
+            let enabled = match length {
+                1 => value.to_le_bytes()[0] == 1,
+                4 => value == 1,
+                _ => false,
+            };
             ensure!(
-                rc == 0 && length == 4 && value == 1,
+                rc == 0 && enabled,
                 "host IPv6 kernel control is not IPv6-only"
             );
         }
