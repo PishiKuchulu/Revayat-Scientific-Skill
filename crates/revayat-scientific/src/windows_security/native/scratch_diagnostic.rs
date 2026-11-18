@@ -41,7 +41,7 @@ unsafe extern "system" {
         path: *const u16,
         access: u32,
         share: u32,
-        security: *const std::ffi::c_void,
+        security: *const registry_authority::native::Security,
         creation: u32,
         flags: u32,
         template: Handle,
