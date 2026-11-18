@@ -35,6 +35,26 @@ unsafe extern "system" {
         options: u32,
     ) -> i32;
 }
+#[link(name = "advapi32")]
+unsafe extern "system" {
+    fn ConvertSecurityDescriptorToStringSecurityDescriptorW(
+        descriptor: *const std::ffi::c_void,
+        revision: u32,
+        fields: u32,
+        output: *mut *mut u16,
+        length: *mut u32,
+    ) -> i32;
+    fn GetSecurityInfo(
+        handle: Handle,
+        kind: i32,
+        fields: u32,
+        owner: *mut Handle,
+        group: *mut Handle,
+        dacl: *mut Handle,
+        sacl: *mut Handle,
+        descriptor: *mut Handle,
+    ) -> u32;
+}
 #[link(name = "kernel32")]
 unsafe extern "system" {
     fn CreateFileW(
@@ -46,6 +66,7 @@ unsafe extern "system" {
         flags: u32,
         template: Handle,
     ) -> Handle;
+    fn LocalFree(value: Handle) -> Handle;
     fn GetLastError() -> u32;
     fn SetFileInformationByHandle(
         handle: Handle,
@@ -363,6 +384,56 @@ fn policy_probe(
     owners: &ProbeOwners,
     deadline: &dyn Fn() -> Result<()>,
 ) -> Result<Vec<i32>> {
+    // T63: dump the landed root descriptor as SDDL (host context).
+    {
+        let mut descriptor: Handle = null_mut();
+        let mut owner: Handle = null_mut();
+        let mut dacl: Handle = null_mut();
+        let status = unsafe {
+            GetSecurityInfo(
+                refs.root.0,
+                1,
+                0x5,
+                &mut owner,
+                null_mut(),
+                &mut dacl,
+                null_mut(),
+                &mut descriptor,
+            )
+        };
+        if status == 0 && !descriptor.is_null() {
+            let mut text: *mut u16 = null_mut();
+            let mut length = 0u32;
+            let ok = unsafe {
+                ConvertSecurityDescriptorToStringSecurityDescriptorW(
+                    descriptor,
+                    1,
+                    0x5,
+                    &mut text,
+                    &mut length,
+                )
+            };
+            if ok != 0 && !text.is_null() {
+                let mut count = 0usize;
+                while count < 1024 && unsafe { *text.add(count) } != 0 {
+                    count += 1;
+                }
+                let sddl =
+                    String::from_utf16_lossy(unsafe { std::slice::from_raw_parts(text, count) });
+                eprintln!("T63 root sddl: {sddl}");
+                unsafe {
+                    LocalFree(text.cast());
+                }
+            } else {
+                eprintln!("T63 convert failed err={}", unsafe { GetLastError() });
+            }
+            unsafe {
+                LocalFree(descriptor);
+            }
+        } else {
+            eprintln!("T63 GetSecurityInfo status={status}");
+        }
+    }
     let mut dirs = [
         NativeRequest::new(volume.native_root(), "lpac", "device"),
         NativeRequest::new(
