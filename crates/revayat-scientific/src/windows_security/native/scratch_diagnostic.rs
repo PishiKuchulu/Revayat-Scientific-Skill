@@ -863,8 +863,8 @@ fn policy_probe(
             for (tag, path, mask, creation, flags) in [
                 ("c1", format!("{root}t67-a"), 0x0013_01BFu32, 1u32, 0x80u32),
                 ("c2", format!("{root}t67-b"), 0xC003_0080u32, 1, 0x80),
-                ("o1", root.clone(), 0x2, 3, 0x0200_0000),
-                ("o2", root.clone(), 0x2, 3, 0x80),
+                ("o1", root.to_string(), 0x2, 3, 0x0200_0000),
+                ("o2", root.to_string(), 0x2, 3, 0x80),
             ] {
                 let probe_path = wide(&path);
                 let handle = unsafe {
