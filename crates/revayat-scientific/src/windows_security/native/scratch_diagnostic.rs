@@ -559,9 +559,7 @@ fn policy_probe(
             eprintln!("T66 convert failed err={}", unsafe { GetLastError() });
         }
         let needle: [u8; 12] = [1, 1, 0, 0, 0, 0, 0, 0x10, 0, 0x10, 0, 0];
-        let found = root_sd
-            .windows(needle.len())
-            .any(|window| window == needle);
+        let found = root_sd.windows(needle.len()).any(|window| window == needle);
         eprintln!(
             "T66 root_sd len={} low_label_sid_present={found}",
             root_sd.len()
