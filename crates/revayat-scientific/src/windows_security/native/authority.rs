@@ -673,7 +673,13 @@ fn drain(pipe: &Owned, capture: &mut Capture, limit: usize) -> Result<()> {
                 && read as usize <= capacity,
             "capture pipe read failed"
         );
-        capture.append(&buffer[..read as usize], limit)?;
+        if let Err(error) = capture.append(&buffer[..read as usize], limit) {
+            eprintln!(
+                "T53 drain chunk rejected: limit={limit} read={read} chunk={}",
+                String::from_utf8_lossy(&buffer[..read as usize])
+            );
+            return Err(error);
+        }
     }
     anyhow::bail!("capture read budget exhausted")
 }
