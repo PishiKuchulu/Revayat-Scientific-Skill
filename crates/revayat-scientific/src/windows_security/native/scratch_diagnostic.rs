@@ -527,7 +527,7 @@ fn policy_probe(
         // T64: offline reference-monitor verdicts for this thread's package token.
         {
             let mut token: Handle = null_mut();
-            if unsafe { OpenThreadToken(GetCurrentThread(), 0x8, 0, &mut token) } != 0
+            if unsafe { OpenThreadToken(GetCurrentThread(), 0x8, 1, &mut token) } != 0
                 && !token.is_null()
             {
                 let mapping: [u32; 4] = [0x0012_0089, 0x0012_0116, 0x0012_00A0, 0x001F_01FF];
