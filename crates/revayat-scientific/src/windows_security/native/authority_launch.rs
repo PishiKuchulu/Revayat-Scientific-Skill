@@ -211,6 +211,21 @@ pub(super) fn prepare(
     let operation = (|| {
         let scratch = if let Some(plan) = quota {
             plain_path(&directory)?;
+            {
+                let first_entry = std::fs::read_dir(&directory)
+                    .ok()
+                    .and_then(|mut entries| entries.next())
+                    .and_then(|entry| entry.ok())
+                    .map(|entry| entry.file_name().to_string_lossy().into_owned());
+                eprintln!(
+                    "T32 binding: directory={directory:?} readonly_root={:?} object_id={:?} path_object_id={:?} first_entry={first_entry:?} auxiliary_image={:?} expected_auxiliary={:?}",
+                    plan.readonly_root,
+                    identity::object_id(held_directory.as_ref().unwrap()),
+                    identity::path_object_id(&plan.readonly_root),
+                    plan.auxiliary_image,
+                    directory.join(name),
+                );
+            }
             ensure!(
                 directory == plan.readonly_root
                     && held_directory.as_ref().unwrap().metadata()?.is_dir()
