@@ -205,6 +205,27 @@ pub(super) fn identity(handle: Handle, directory: bool) -> Result<Identity> {
             std::io::Error::last_os_error().raw_os_error(),
             name(handle)
         );
+        let mut wide = [0u8; 16];
+        let rc_wide =
+            unsafe { GetFileInformationByHandleEx(handle, 9, wide.as_mut_ptr().cast(), 16) };
+        eprintln!(
+            "T39 probe class9 size16: rc={rc_wide} raw_os_error={:?}",
+            std::io::Error::last_os_error().raw_os_error()
+        );
+        let mut basic = [0u8; 40];
+        let rc_basic =
+            unsafe { GetFileInformationByHandleEx(handle, 0, basic.as_mut_ptr().cast(), 40) };
+        eprintln!(
+            "T39 probe class0 size40: rc={rc_basic} raw_os_error={:?}",
+            std::io::Error::last_os_error().raw_os_error()
+        );
+        let mut idbuf = [0u8; 24];
+        let rc_id =
+            unsafe { GetFileInformationByHandleEx(handle, 18, idbuf.as_mut_ptr().cast(), 24) };
+        eprintln!(
+            "T39 probe class18 size24: rc={rc_id} raw_os_error={:?}",
+            std::io::Error::last_os_error().raw_os_error()
+        );
     }
     ensure!(attr_rc != 0, "scratch attributes query failed");
     ensure!(
