@@ -52,6 +52,18 @@ fn v6_socket(kind: i32, protocol: i32, port: u16) -> Result<usize> {
         }
         anyhow::bail!("host IPv6 kernel control could not be bound IPv6-only");
     }
+    let mut read_value = -1i32;
+    let mut read_length = 4i32;
+    let read_rc = unsafe {
+        getsockopt(
+            created,
+            41,
+            27,
+            (&mut read_value as *mut i32).cast(),
+            &mut read_length,
+        )
+    };
+    eprintln!("T23 v6_socket kind={kind} read_rc={read_rc} len={read_length} value={read_value}");
     Ok(created)
 }
 
@@ -100,18 +112,18 @@ impl NetworkControls {
         for socket in [tcp6.as_raw_socket(), udp6.as_raw_socket()] {
             let mut value = 0i32;
             let mut length = 4i32;
+            let rc = unsafe {
+                getsockopt(
+                    socket as usize,
+                    41,
+                    27,
+                    (&mut value as *mut i32).cast(),
+                    &mut length,
+                )
+            };
+            eprintln!("T23 verify rc={rc} len={length} value={value}");
             ensure!(
-                unsafe {
-                    getsockopt(
-                        socket as usize,
-                        41,
-                        27,
-                        (&mut value as *mut i32).cast(),
-                        &mut length,
-                    )
-                } == 0
-                    && length == 4
-                    && value == 1,
+                rc == 0 && length == 4 && value == 1,
                 "host IPv6 kernel control is not IPv6-only"
             );
         }
