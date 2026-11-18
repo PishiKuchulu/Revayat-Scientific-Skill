@@ -375,6 +375,50 @@ impl<'a> NativeCompletion<'a> {
                 capture.bytes.len(),
                 capture.eof
             );
+            for _ in 0..8 {
+                let mut available = 0;
+                let peeked = unsafe {
+                    PeekNamedPipe(
+                        reader.0,
+                        std::ptr::null_mut(),
+                        0,
+                        std::ptr::null_mut(),
+                        &mut available,
+                        std::ptr::null_mut(),
+                    )
+                };
+                if peeked == 0 {
+                    eprintln!("T52 pipe dump: peek failed last_error={}", unsafe {
+                        GetLastError()
+                    });
+                    break;
+                }
+                if available == 0 {
+                    eprintln!("T52 pipe dump: empty");
+                    break;
+                }
+                let mut buffer = [0u8; 700];
+                let capacity = (available as usize).min(buffer.len());
+                let mut read = 0;
+                let got = unsafe {
+                    ReadFile(
+                        reader.0,
+                        buffer.as_mut_ptr().cast(),
+                        capacity as u32,
+                        &mut read,
+                        std::ptr::null_mut(),
+                    )
+                };
+                if got == 0 || read == 0 {
+                    eprintln!("T52 pipe dump: read failed");
+                    break;
+                }
+                eprintln!(
+                    "T52 pipe chunk ({} bytes): {}",
+                    read,
+                    String::from_utf8_lossy(&buffer[..read as usize])
+                );
+            }
             failures.push(error);
         }
         if let Some(retain) = retain.as_mut() {
