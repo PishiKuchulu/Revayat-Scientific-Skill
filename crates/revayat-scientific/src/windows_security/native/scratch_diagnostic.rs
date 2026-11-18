@@ -252,7 +252,7 @@ impl References {
         };
         ensure!(
             access::identity(reference.0, true)? == identity
-                && access::identity(handle as Handle, true)? == identity
+                && access::identity_id(handle as Handle)? == identity
                 && access::name(handle as Handle)? == name,
             "scratch diagnostic opened directory identity differs"
         );

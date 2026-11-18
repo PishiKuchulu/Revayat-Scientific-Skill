@@ -191,11 +191,6 @@ pub(super) fn identity(handle: Handle, directory: bool) -> Result<Identity> {
         "scratch object is not a disk file"
     );
     let mut attributes = Attributes::default();
-    let mut value = Identity {
-        volume: 0,
-        low: 0,
-        high: 0,
-    };
     let attr_rc = unsafe {
         GetFileInformationByHandleEx(handle, 9, (&mut attributes as *mut Attributes).cast(), 8)
     };
@@ -332,6 +327,18 @@ pub(super) fn identity(handle: Handle, directory: bool) -> Result<Identity> {
         attributes.attributes & 0x410 == if directory { 0x10 } else { 0 } && attributes.tag == 0,
         "scratch object type or reparse tag differs"
     );
+    Ok(identity_id(handle)?)
+}
+pub(super) fn identity_id(handle: Handle) -> Result<Identity> {
+    ensure!(
+        unsafe { GetFileType(handle) } == 1,
+        "scratch object is not a disk file"
+    );
+    let mut value = Identity {
+        volume: 0,
+        low: 0,
+        high: 0,
+    };
     ensure!(
         unsafe {
             GetFileInformationByHandleEx(handle, 18, (&mut value as *mut Identity).cast(), 24)
