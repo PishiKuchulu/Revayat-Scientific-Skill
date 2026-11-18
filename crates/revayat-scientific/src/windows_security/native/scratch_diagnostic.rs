@@ -812,9 +812,9 @@ fn policy_probe(
             unsafe extern "system" {
                 fn GetTokenInformation(
                     token: Handle,
-                    class: u32,
-                    buffer: *mut std::ffi::c_void,
-                    length: u32,
+                    class: i32,
+                    data: Handle,
+                    size: u32,
                     returned: *mut u32,
                 ) -> i32;
             }
