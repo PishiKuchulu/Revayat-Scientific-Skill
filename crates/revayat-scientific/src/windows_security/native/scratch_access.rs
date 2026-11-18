@@ -327,7 +327,7 @@ pub(super) fn identity(handle: Handle, directory: bool) -> Result<Identity> {
         attributes.attributes & 0x410 == if directory { 0x10 } else { 0 } && attributes.tag == 0,
         "scratch object type or reparse tag differs"
     );
-    Ok(identity_id(handle)?)
+    identity_id(handle)
 }
 pub(super) fn identity_id(handle: Handle) -> Result<Identity> {
     ensure!(
