@@ -123,11 +123,17 @@ impl Owned {
         Ok(Self(handle))
     }
     pub fn open(path: impl AsRef<Path>, access: u32, share: u32, flags: u32) -> Result<Self> {
+        let shown = path.as_ref().to_path_buf();
         let path = wide(path.as_ref());
         let handle =
             unsafe { CreateFileW(path.as_ptr(), access, share, null(), 3, flags, null_mut()) };
         if handle.is_null() || handle as isize == -1 {
-            return Err(std::io::Error::last_os_error()).context("open bound scratch object");
+            let error = std::io::Error::last_os_error();
+            eprintln!(
+                "T34 open failed: path={shown:?} access={access:#010x} share={share:#x} flags={flags:#010x} raw_os_error={:?}",
+                error.raw_os_error(),
+            );
+            return Err(error).context("open bound scratch object");
         }
         Ok(Self(handle))
     }
