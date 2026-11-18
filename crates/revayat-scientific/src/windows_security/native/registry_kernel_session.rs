@@ -333,6 +333,17 @@ pub fn run_machine_kernel_session(image: &Path, view: &NativeRunView) -> Result<
         profile_cleanup,
     )
     .map_err(|error| {
+        fn dump(error: &anyhow::Error, depth: usize) {
+            eprintln!("T28 [{depth}]: {error:?}");
+            if let Some(failures) =
+                error.downcast_ref::<crate::windows_security::activation::Failures>()
+            {
+                for inner in &failures.errors {
+                    dump(inner, depth + 1);
+                }
+            }
+        }
+        dump(&error, 0);
         eprintln!("T20 kernel failure: {error:?}");
         wire::sanitize(error)
     })
