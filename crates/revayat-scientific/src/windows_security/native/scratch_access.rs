@@ -205,6 +205,10 @@ pub(super) fn identity(handle: Handle, directory: bool) -> Result<Identity> {
             std::io::Error::last_os_error().raw_os_error(),
             name(handle)
         );
+        eprintln!(
+            "T41 identity failure backtrace:\n{}",
+            std::backtrace::Backtrace::force_capture()
+        );
         let mut wide = [0u8; 16];
         let rc_wide =
             unsafe { GetFileInformationByHandleEx(handle, 9, wide.as_mut_ptr().cast(), 16) };
