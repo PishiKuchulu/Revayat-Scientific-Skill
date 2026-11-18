@@ -57,17 +57,18 @@ fn text(path: &std::path::Path) -> Result<&str> {
         .to_str()
         .ok_or_else(|| anyhow::anyhow!("kernel path is not Unicode"))?;
     let bytes = text.as_bytes();
-    ensure!(
-        bytes.len() >= 3
-            && bytes[0].is_ascii_alphabetic()
-            && &bytes[1..3] == b":\\"
-            && !text.contains(['\0', '"', '/', ';'])
-            && text.encode_utf16().count() < 512
-            && text[3..]
-                .split('\\')
-                .all(|part| part != "." && part != ".."),
-        "kernel fixed path differs"
-    );
+    let valid = bytes.len() >= 3
+        && bytes[0].is_ascii_alphabetic()
+        && &bytes[1..3] == b":\\"
+        && !text.contains(['\0', '"', '/', ';'])
+        && text.encode_utf16().count() < 512
+        && text[3..]
+            .split('\\')
+            .all(|part| part != "." && part != "..");
+    if !valid {
+        eprintln!("T25 bad kernel path: {text:?}");
+    }
+    ensure!(valid, "kernel fixed path differs");
     Ok(text)
 }
 impl KernelPlan {
