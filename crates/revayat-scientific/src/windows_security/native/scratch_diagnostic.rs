@@ -221,28 +221,7 @@ impl References {
         let mut root = volume.root.duplicate()?;
         let mut temp = Owned(null_mut());
         let result = (|| {
-            let temp_path = format!("{}temp", volume.drive_root());
-            temp = match Owned::open(&temp_path, 0x80, 7, 0x220000) {
-                Ok(opened) => opened,
-                Err(error) => {
-                    for (label, access, flags) in [
-                        ("read_control", 0x20000, 0x220000),
-                        ("attributes_backup", 0x80, 0x2220000),
-                        ("attributes_reparse", 0x80, 0x200000),
-                    ] {
-                        match Owned::open(&temp_path, access, 7, flags) {
-                            Ok(mut probe) => {
-                                eprintln!("T35 probe {label}: OPEN OK");
-                                let _ = probe.close();
-                            }
-                            Err(probe_error) => {
-                                eprintln!("T35 probe {label}: failed: {probe_error:?}");
-                            }
-                        }
-                    }
-                    return Err(error);
-                }
-            };
+            temp = Owned::open(format!("{}temp", volume.drive_root()), 0x80, 7, 0x2200000)?;
             let root_id = access::identity(root.0, true)?;
             let temp_id = access::identity(temp.0, true)?;
             ensure!(
