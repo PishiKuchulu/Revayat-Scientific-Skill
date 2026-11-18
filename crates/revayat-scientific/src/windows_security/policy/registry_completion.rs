@@ -168,6 +168,11 @@ pub fn complete_run(
     for index in 0..io.release_count() {
         attempt(&mut failures, io.release(index));
     }
+    if !failures.is_empty() {
+        for (index, failure) in failures.iter().enumerate() {
+            eprintln!("T47 completion failure[{index}]: {failure:?}");
+        }
+    }
     let failure = if flags.trace {
         let io = RefCell::new(io);
         dispatch::finish_trace(
