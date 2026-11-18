@@ -806,6 +806,71 @@ fn policy_probe(
                 eprintln!("T61 {tag} mask=0x{mask:08X} ok");
             }
         }
+        // T68: the impersonation token's user and AppContainer SIDs as strings.
+        {
+            unsafe extern "system" {
+                fn GetTokenInformation(
+                    token: Handle,
+                    class: i32,
+                    data: Handle,
+                    size: u32,
+                    returned: *mut u32,
+                ) -> i32;
+                fn ConvertSidToStringSidW(sid: Handle, text: *mut *mut u16) -> i32;
+            }
+            let mut token: Handle = null_mut();
+            let opened = unsafe { OpenThreadToken(GetCurrentThread(), 8, 1, &mut token) };
+            if opened != 0 && !token.is_null() {
+                for (tag, class) in [("user", 1i32), ("package", 31i32)] {
+                    let mut buffer = [0u8; 256];
+                    let mut returned = 0u32;
+                    let ok = unsafe {
+                        GetTokenInformation(
+                            token,
+                            class,
+                            buffer.as_mut_ptr().cast(),
+                            buffer.len() as u32,
+                            &mut returned,
+                        )
+                    };
+                    if ok != 0 && returned >= 8 {
+                        let sid = unsafe { *(buffer.as_ptr().cast::<*const u8>()) };
+                        if !sid.is_null() {
+                            let mut text: *mut u16 = null_mut();
+                            let converted = unsafe { ConvertSidToStringSidW(sid as Handle, &mut text) };
+                            if converted != 0 && !text.is_null() {
+                                let mut count = 0usize;
+                                while count < 256 && unsafe { *text.add(count) } != 0 {
+                                    count += 1;
+                                }
+                                let value = String::from_utf16_lossy(unsafe {
+                                    std::slice::from_raw_parts(text, count)
+                                });
+                                eprintln!("T68 {tag} sid={value}");
+                                unsafe {
+                                    LocalFree(text.cast());
+                                }
+                            } else {
+                                eprintln!("T68 {tag} convert failed");
+                            }
+                        } else {
+                            eprintln!("T68 {tag} null-sid");
+                        }
+                    } else {
+                        eprintln!("T68 {tag} query failed err={}", unsafe {
+                            GetLastError()
+                        });
+                    }
+                }
+                unsafe {
+                    CloseHandle(token);
+                }
+            } else {
+                eprintln!("T68 token open failed err={}", unsafe {
+                    GetLastError()
+                });
+            }
+        }
         // T67: token integrity + create/open variants without DELETE_ON_CLOSE, plus a
         // handle-relative NtCreateFile, under the scoped impersonation.
         {
