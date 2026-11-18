@@ -146,6 +146,19 @@ pub(super) fn primary<'a>(
         drain(&owner.stderr, &mut owner.error, ERROR_LIMIT)?;
         let output = owner.output.finish(OUTPUT_LIMIT)?.to_owned();
         let errors = owner.error.finish(ERROR_LIMIT)?.to_owned();
+        if code != 0 || !errors.is_empty() {
+            let tail: String = output
+                .chars()
+                .rev()
+                .take(3000)
+                .collect::<String>()
+                .chars()
+                .rev()
+                .collect();
+            eprintln!(
+                "T43 primary refusal: code={code:08X} errors={errors:?} output_tail={tail:?}"
+            );
+        }
         ensure!(
             code == 0 && errors.is_empty(),
             "kernel primary refused its actual fixed controls exit={code:08X}"
