@@ -210,6 +210,7 @@ pub(super) fn prepare(
     };
     let operation = (|| {
         let scratch = if let Some(plan) = quota {
+            let directory = crate::windows_security::native::dos_path::existing(&directory)?;
             plain_path(&directory)?;
             {
                 let first_entry = std::fs::read_dir(&directory)
