@@ -591,6 +591,91 @@ fn policy_probe(
         ),
     ];
     let mut requests = volume::requests(volume.native_root())?;
+    // T69 setup: throwaway directories carrying DACL variants of the root policy.
+    {
+        #[link(name = "advapi32")]
+        unsafe extern "system" {
+            fn ConvertStringSecurityDescriptorToSecurityDescriptorW(
+                text: *const u16,
+                revision: u32,
+                descriptor: *mut Handle,
+                size: *mut u32,
+            ) -> i32;
+        }
+        #[link(name = "ntdll")]
+        unsafe extern "system" {
+            fn NtSetSecurityObject(
+                handle: Handle,
+                fields: u32,
+                data: *const std::ffi::c_void,
+            ) -> i32;
+        }
+        let pkg = volume.package_sid();
+        let host_sid = &volume.intent.host;
+        let variants = [
+            format!(
+                "D:P(D;OICI;0x000C0000;;;{pkg})(D;OICI;0x000C0000;;;OW)(A;OICI;FA;;;SY)(A;OICI;FA;;;BA)(A;OICI;FA;;;{host_sid})(A;OICI;0x001301BF;;;{pkg})"
+            ),
+            format!(
+                "D:P(D;OICI;0x000C0000;;;OW)(A;OICI;FA;;;SY)(A;OICI;FA;;;BA)(A;OICI;FA;;;{host_sid})(A;OICI;0x001301BF;;;{pkg})"
+            ),
+            format!(
+                "D:P(D;OICI;0x000C0000;;;{pkg})(A;OICI;FA;;;SY)(A;OICI;FA;;;BA)(A;OICI;FA;;;{host_sid})(A;OICI;0x001301BF;;;{pkg})"
+            ),
+            format!(
+                "D:P(D;OICI;0x000C0000;;;{pkg})(D;OICI;0x000C0000;;;OW)(A;OICI;FA;;;SY)(A;OICI;FA;;;BA)(A;OICI;FA;;;{host_sid})(A;OICI;FA;;;{pkg})"
+            ),
+            format!("D:P(A;OICI;0x001301BF;;;{pkg})"),
+            "D:P(A;OICI;0x001301BF;;;S-1-15-2-1)".to_string(),
+            format!(
+                "D:P(A;OICI;FA;;;SY)(A;OICI;FA;;;BA)(A;OICI;FA;;;{host_sid})(A;OICI;0x001301BF;;;{pkg})"
+            ),
+        ];
+        for (index, sddl) in variants.iter().enumerate() {
+            let dir = format!("{}t69-{}", volume.drive_root(), index + 1);
+            let made = std::fs::create_dir(&dir);
+            let text = wide(sddl);
+            let mut raw: Handle = null_mut();
+            let mut bytes = 0u32;
+            let converted = unsafe {
+                ConvertStringSecurityDescriptorToSecurityDescriptorW(
+                    text.as_ptr(),
+                    1,
+                    &mut raw,
+                    &mut bytes,
+                )
+            };
+            let mut status = -1i32;
+            if converted != 0 && !raw.is_null() {
+                let path = wide(&dir);
+                let handle = unsafe {
+                    CreateFileW(
+                        path.as_ptr(),
+                        0x0006_0000,
+                        7,
+                        null_mut(),
+                        3,
+                        0x0200_0000,
+                        null_mut(),
+                    )
+                };
+                if !handle.is_null() && handle as isize != -1 {
+                    status = unsafe { NtSetSecurityObject(handle, 4, raw) };
+                    unsafe {
+                        CloseHandle(handle);
+                    }
+                }
+                unsafe {
+                    LocalFree(raw);
+                }
+            }
+            eprintln!(
+                "T69 setup v{} made={} converted={converted} status=0x{status:08X}",
+                index + 1,
+                made.is_ok()
+            );
+        }
+    }
     let opened = context.scoped(|| {
         // T64: offline reference-monitor verdicts for this thread's package token.
         {
@@ -869,6 +954,21 @@ fn policy_probe(
                 eprintln!("T68 token open failed err={}", unsafe {
                     GetLastError()
                 });
+            }
+        }
+        // T69: create a leaf inside each DACL-variant directory.
+        for index in 1..=7usize {
+            let path = wide(&format!("{}t69-{index}\\leaf", volume.drive_root()));
+            let handle = unsafe {
+                CreateFileW(path.as_ptr(), 0xC003_0080, 3, null_mut(), 1, 0x80, null_mut())
+            };
+            if handle.is_null() || handle as isize == -1 {
+                eprintln!("T69 v{index} err={}", unsafe { GetLastError() });
+            } else {
+                unsafe {
+                    CloseHandle(handle);
+                }
+                eprintln!("T69 v{index} ok");
             }
         }
         // T67: token integrity + create/open variants without DELETE_ON_CLOSE, plus a
