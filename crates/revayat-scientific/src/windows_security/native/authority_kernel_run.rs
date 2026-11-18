@@ -163,7 +163,12 @@ pub(super) fn primary<'a>(
             code == 0 && errors.is_empty(),
             "kernel primary refused its actual fixed controls exit={code:08X}"
         );
-        kernel_controls::require_primary_record(output.as_bytes(), plan, &inventory)?;
+        if let Err(error) =
+            kernel_controls::require_primary_record(output.as_bytes(), plan, &inventory)
+        {
+            eprintln!("T46 primary record check failed: {error:?} output={output:?}");
+            return Err(error);
+        }
         owner.source.as_mut().unwrap().require(image)?;
         owner.target.as_mut().unwrap().require(&target)?;
         Ok(Observation {
