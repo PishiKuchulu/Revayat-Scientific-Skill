@@ -426,6 +426,7 @@ impl fmt::Debug for PrivateFailure {
 }
 impl std::error::Error for PrivateFailure {}
 pub fn sanitize(error: anyhow::Error) -> anyhow::Error {
+    eprintln!("T29 sanitize input: {error:?}");
     if error.is::<PrivateFailure>()
         || error.is::<ReceiptFailure>()
         || error.is::<crate::windows_security::activation::diagnostics::AuthoredFailure>()
