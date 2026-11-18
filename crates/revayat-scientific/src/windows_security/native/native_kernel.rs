@@ -57,24 +57,15 @@ pub(super) fn observe(plan: &KernelPlan) -> Result<String> {
             plan.role == Role::KernelPrimary,
             "kernel actor role is not a primary"
         );
-        eprintln!("T56 stage: positive");
         files::positive(&root, &inventory, false)?;
-        eprintln!("T56 stage: token_child");
         child_controls::token_child(plan, &inventory)?;
-        eprintln!("T56 stage: private");
         private::controls(&root, &plan.quota, &inventory)?;
-        eprintln!("T56 stage: filesystem");
         filesystem::controls(plan)?;
-        eprintln!("T56 stage: registry");
         registry::controls(plan)?;
-        eprintln!("T56 stage: network");
         network::controls(plan)?;
-        eprintln!("T56 stage: job");
         job::require()?;
         job::memory()?;
-        eprintln!("T56 stage: pids");
         child_controls::pids(plan, &inventory)?;
-        eprintln!("T56 stage: eof");
         eof::controls(&root)?;
         root.require()?;
         ensure!(

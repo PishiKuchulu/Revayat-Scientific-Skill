@@ -42,13 +42,6 @@ pub(super) fn all(results: impl IntoIterator<Item = Result<()>>) -> Result<()> {
 pub(super) struct Owned(pub Raw);
 impl Owned {
     pub(super) fn new(raw: Raw) -> Result<Self> {
-        if raw.is_null() || raw as isize == -1 {
-            eprintln!(
-                "T55 handle acquisition failed last_error={} backtrace:\n{}",
-                unsafe { GetLastError() },
-                std::backtrace::Backtrace::force_capture()
-            );
-        }
         ensure!(
             !raw.is_null() && raw as isize != -1,
             "native quota handle acquisition failed"
@@ -149,11 +142,11 @@ pub(super) fn open(
     flags: u32,
     security: *const Security,
 ) -> Result<Owned> {
-    let path_w = wide(path);
+    let path = wide(path);
     // SAFETY: bounded fixed plan path, live optional security and no template handle.
-    let raw = unsafe {
+    Owned::new(unsafe {
         CreateFileW(
-            path_w.as_ptr(),
+            path.as_ptr(),
             access,
             share,
             security,
@@ -161,14 +154,7 @@ pub(super) fn open(
             flags,
             null_mut(),
         )
-    };
-    if raw.is_null() || raw as isize == -1 {
-        eprintln!(
-            "T57 open failed: path={path} access=0x{access:08X} creation={creation} flags=0x{flags:08X} last_error={}",
-            unsafe { GetLastError() }
-        );
-    }
-    Owned::new(raw)
+    })
 }
 #[link(name = "kernel32")]
 unsafe extern "system" {
