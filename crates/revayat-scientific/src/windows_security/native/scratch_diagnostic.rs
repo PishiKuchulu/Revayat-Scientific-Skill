@@ -806,6 +806,134 @@ fn policy_probe(
                 eprintln!("T61 {tag} mask=0x{mask:08X} ok");
             }
         }
+        // T67: token integrity + create/open variants without DELETE_ON_CLOSE, plus a
+        // handle-relative NtCreateFile, under the scoped impersonation.
+        {
+            unsafe extern "system" {
+                fn GetTokenInformation(
+                    token: Handle,
+                    class: u32,
+                    buffer: *mut std::ffi::c_void,
+                    length: u32,
+                    returned: *mut u32,
+                ) -> i32;
+            }
+            let mut token: Handle = null_mut();
+            let opened = unsafe { OpenThreadToken(GetCurrentThread(), 8, 1, &mut token) };
+            if opened != 0 && !token.is_null() {
+                let mut buffer = [0u8; 128];
+                let mut returned = 0u32;
+                let ok = unsafe {
+                    GetTokenInformation(
+                        token,
+                        25,
+                        buffer.as_mut_ptr().cast(),
+                        buffer.len() as u32,
+                        &mut returned,
+                    )
+                };
+                if ok != 0 && returned >= 8 {
+                    let sid = unsafe { *(buffer.as_ptr().cast::<*const u8>()) };
+                    if !sid.is_null() {
+                        let count = unsafe { *sid.add(1) } as usize;
+                        let rid = u32::from_le_bytes(unsafe {
+                            [
+                                *sid.add(8 + 4 * count - 4),
+                                *sid.add(8 + 4 * count - 3),
+                                *sid.add(8 + 4 * count - 2),
+                                *sid.add(8 + 4 * count - 1),
+                            ]
+                        });
+                        eprintln!("T67 il rid={rid}");
+                    } else {
+                        eprintln!("T67 il null-sid");
+                    }
+                } else {
+                    eprintln!("T67 il query failed err={}", unsafe { GetLastError() });
+                }
+                unsafe {
+                    CloseHandle(token);
+                }
+            } else {
+                eprintln!("T67 il token open failed err={}", unsafe {
+                    GetLastError()
+                });
+            }
+            let root = volume.drive_root();
+            for (tag, path, mask, creation, flags) in [
+                ("c1", format!("{root}t67-a"), 0x0013_01BFu32, 1u32, 0x80u32),
+                ("c2", format!("{root}t67-b"), 0xC003_0080u32, 1, 0x80),
+                ("o1", root.clone(), 0x2, 3, 0x0200_0000),
+                ("o2", root.clone(), 0x2, 3, 0x80),
+            ] {
+                let probe_path = wide(&path);
+                let handle = unsafe {
+                    CreateFileW(
+                        probe_path.as_ptr(),
+                        mask,
+                        3,
+                        null_mut(),
+                        creation,
+                        flags,
+                        null_mut(),
+                    )
+                };
+                if handle.is_null() || handle as isize == -1 {
+                    eprintln!("T67 {tag} err={}", unsafe { GetLastError() });
+                } else {
+                    unsafe {
+                        CloseHandle(handle);
+                    }
+                    eprintln!("T67 {tag} ok");
+                }
+            }
+            // n1: handle-relative create through the pinned root handle.
+            {
+                use crate::windows_security::sxs::{
+                    native_file_abi::NtCreateFile, storage::creation::IoStatus as IoStatusBlock,
+                };
+                use registry_authority::native::{
+                    Attributes as ObjectAttributes, NtClose, Unicode as UnicodeString,
+                };
+                let name = wide("t67-c");
+                let unicode = UnicodeString {
+                    length: 10,
+                    maximum: 12,
+                    buffer: name.as_ptr(),
+                };
+                let attributes = ObjectAttributes {
+                    length: 48,
+                    root: refs.root.0,
+                    name: &unicode,
+                    flags: 0x40,
+                    descriptor: null_mut(),
+                    qos: null_mut(),
+                };
+                let mut handle: Handle = null_mut();
+                let mut iosb: IoStatusBlock = unsafe { std::mem::zeroed() };
+                let status = unsafe {
+                    NtCreateFile(
+                        &mut handle,
+                        0xC003_0080,
+                        &attributes,
+                        &mut iosb,
+                        std::ptr::null(),
+                        0,
+                        3,
+                        2,
+                        0x40,
+                        null_mut(),
+                        0,
+                    )
+                };
+                if !handle.is_null() {
+                    unsafe {
+                        NtClose(handle);
+                    }
+                }
+                eprintln!("T67 n1 status=0x{status:08X}");
+            }
+        }
         context.check(owners)?;
         deadline()
     });
