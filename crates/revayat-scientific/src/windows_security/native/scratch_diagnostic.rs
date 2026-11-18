@@ -496,8 +496,42 @@ fn policy_probe(
             eprintln!("T63 GetSecurityInfo sacl status={status2}");
         }
     }
+    // T65: full SDDL (incl. SACL) from the raw descriptor bytes already readable here.
+    let dump_sd = |label: &str, bytes: &[u8]| {
+        if bytes.is_empty() {
+            eprintln!("T65 {label} sddl: <empty>");
+            return;
+        }
+        let mut text: *mut u16 = null_mut();
+        let mut length = 0u32;
+        let ok = unsafe {
+            ConvertSecurityDescriptorToStringSecurityDescriptorW(
+                bytes.as_ptr().cast(),
+                1,
+                0xF,
+                &mut text,
+                &mut length,
+            )
+        };
+        if ok != 0 && !text.is_null() {
+            let mut count = 0usize;
+            while count < 1024 && unsafe { *text.add(count) } != 0 {
+                count += 1;
+            }
+            let sddl = String::from_utf16_lossy(unsafe { std::slice::from_raw_parts(text, count) });
+            eprintln!("T65 {label} sddl: {sddl}");
+            unsafe {
+                LocalFree(text.cast());
+            }
+        } else {
+            eprintln!("T65 {label} convert failed err={}", unsafe {
+                GetLastError()
+            });
+        }
+    };
     // T64 prep: raw descriptors for offline AccessCheck under impersonation.
     let root_sd = access::security(refs.root.0, 0x17).unwrap_or_default();
+    dump_sd("root", &root_sd);
     let device_sd = {
         let root = volume.drive_root();
         if root.len() >= 2 {
@@ -514,6 +548,7 @@ fn policy_probe(
             Vec::new()
         }
     };
+    dump_sd("device", &device_sd);
     let mut dirs = [
         NativeRequest::new(volume.native_root(), "lpac", "device"),
         NativeRequest::new(
