@@ -169,8 +169,20 @@ pub fn complete_run(
         attempt(&mut failures, io.release(index));
     }
     if !failures.is_empty() {
+        fn dump_t48(error: &anyhow::Error, depth: usize) {
+            eprintln!("T48 completion member depth={depth}: {error:?}");
+            if depth < 4
+                && let Some(group) =
+                    error.downcast_ref::<crate::windows_security::activation::Failures>()
+            {
+                for member in &group.errors {
+                    dump_t48(member, depth + 1);
+                }
+            }
+        }
         for (index, failure) in failures.iter().enumerate() {
-            eprintln!("T47 completion failure[{index}]: {failure:?}");
+            eprintln!("T47 completion failure[{index}]:");
+            dump_t48(failure, 0);
         }
     }
     let failure = if flags.trace {
