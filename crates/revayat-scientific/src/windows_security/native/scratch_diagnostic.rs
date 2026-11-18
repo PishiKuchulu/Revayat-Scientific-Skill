@@ -532,6 +532,41 @@ fn policy_probe(
     // T64 prep: raw descriptors for offline AccessCheck under impersonation.
     let root_sd = access::security(refs.root.0, 0x17).unwrap_or_default();
     dump_sd("root", &root_sd);
+    // T66: convert the same bytes asking for LABEL, and scan for the Low label SID.
+    {
+        let mut text: *mut u16 = null_mut();
+        let mut length = 0u32;
+        let ok = unsafe {
+            ConvertSecurityDescriptorToStringSecurityDescriptorW(
+                root_sd.as_ptr().cast(),
+                1,
+                0x17,
+                &mut text,
+                &mut length,
+            )
+        };
+        if ok != 0 && !text.is_null() {
+            let mut count = 0usize;
+            while count < 1024 && unsafe { *text.add(count) } != 0 {
+                count += 1;
+            }
+            let sddl = String::from_utf16_lossy(unsafe { std::slice::from_raw_parts(text, count) });
+            eprintln!("T66 root sddl label-fields: {sddl}");
+            unsafe {
+                LocalFree(text.cast());
+            }
+        } else {
+            eprintln!("T66 convert failed err={}", unsafe { GetLastError() });
+        }
+        let needle: [u8; 12] = [1, 1, 0, 0, 0, 0, 0, 0x10, 0, 0x10, 0, 0];
+        let found = root_sd
+            .windows(needle.len())
+            .any(|window| window == needle);
+        eprintln!(
+            "T66 root_sd len={} low_label_sid_present={found}",
+            root_sd.len()
+        );
+    }
     let device_sd = {
         let root = volume.drive_root();
         if root.len() >= 2 {
