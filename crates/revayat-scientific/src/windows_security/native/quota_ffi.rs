@@ -42,6 +42,13 @@ pub(super) fn all(results: impl IntoIterator<Item = Result<()>>) -> Result<()> {
 pub(super) struct Owned(pub Raw);
 impl Owned {
     pub(super) fn new(raw: Raw) -> Result<Self> {
+        if raw.is_null() || raw as isize == -1 {
+            eprintln!(
+                "T55 handle acquisition failed last_error={} backtrace:\n{}",
+                unsafe { GetLastError() },
+                std::backtrace::Backtrace::force_capture()
+            );
+        }
         ensure!(
             !raw.is_null() && raw as isize != -1,
             "native quota handle acquisition failed"
