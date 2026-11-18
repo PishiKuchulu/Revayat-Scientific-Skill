@@ -407,6 +407,100 @@ fn policy_probe(
                 eprintln!("T60 create {tag} mask=0x{mask:08X} ok");
             }
         }
+        // T62: worker-identical Win32 root opens plus NT-layer root opens.
+        for (tag, mask) in [("w80", 0x00000080u32), ("wgen", 0x00120089u32)] {
+            let probe_path = wide(volume.drive_root());
+            // SAFETY: fixed diagnostic root path under the scoped impersonation.
+            let handle = unsafe {
+                CreateFileW(
+                    probe_path.as_ptr(),
+                    mask,
+                    7,
+                    null_mut(),
+                    3,
+                    0x02200000,
+                    null_mut(),
+                )
+            };
+            if handle.is_null() || handle as isize == -1 {
+                eprintln!("T62 {tag} mask=0x{mask:08X} err={}", unsafe {
+                    GetLastError()
+                });
+            } else {
+                unsafe {
+                    CloseHandle(handle);
+                }
+                eprintln!("T62 {tag} mask=0x{mask:08X} ok");
+            }
+        }
+        #[repr(C)]
+        struct NtAttributes {
+            length: u32,
+            root: Handle,
+            name: *const NtUnicode,
+            attributes: u32,
+            descriptor: Handle,
+            qos: Handle,
+        }
+        #[repr(C)]
+        struct NtUnicode {
+            length: u16,
+            maximum: u16,
+            buffer: *const u16,
+        }
+        #[repr(C)]
+        #[derive(Default)]
+        struct NtIo {
+            status: i32,
+            pad: u32,
+            information: u64,
+        }
+        let nt_root = volume
+            .native_root()
+            .strip_suffix('\\')
+            .unwrap_or(volume.native_root());
+        let nt_text = wide(nt_root);
+        let nt_unicode = NtUnicode {
+            length: ((nt_text.len() - 1) * 2) as u16,
+            maximum: (nt_text.len() * 2) as u16,
+            buffer: nt_text.as_ptr(),
+        };
+        let nt_attributes = NtAttributes {
+            length: std::mem::size_of::<NtAttributes>() as u32,
+            root: null_mut(),
+            name: &nt_unicode,
+            attributes: 0x40,
+            descriptor: null_mut(),
+            qos: null_mut(),
+        };
+        for (tag, mask) in [
+            ("nt1", 0x00000001u32),
+            ("nt2", 0x00000002u32),
+            ("nt20", 0x00100020u32),
+        ] {
+            let mut handle: Handle = null_mut();
+            let mut io = NtIo::default();
+            // SAFETY: fixed native root path and exact 48-byte attributes layout,
+            // opened under the scoped impersonation; a returned handle is closed here.
+            let status = unsafe {
+                NtOpenFile(
+                    &mut handle,
+                    mask,
+                    (&nt_attributes as *const NtAttributes).cast(),
+                    (&mut io as *mut NtIo).cast(),
+                    7,
+                    0x200021,
+                )
+            };
+            if status == 0 {
+                unsafe {
+                    CloseHandle(handle);
+                }
+                eprintln!("T62 {tag} mask=0x{mask:08X} ok");
+            } else {
+                eprintln!("T62 {tag} mask=0x{mask:08X} status=0x{status:08X}");
+            }
+        }
         // T61: distinguish a directory access-check denial from create semantics.
         for (tag, mask, creation, flags) in [
             ("open_write", 0x00000002u32, 3u32, 0x02200000u32),
