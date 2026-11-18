@@ -116,7 +116,8 @@ pub(crate) fn worker_main() -> i32 {
     })();
     match result {
         Ok(()) => 0,
-        Err(_) => {
+        Err(error) => {
+            eprintln!("T44 worker error: {error:?}");
             // Never format native errors or their causes: paths, token SIDs and captured child bytes stay private.
             if kernel_role {
                 eprintln!("WINDOWS_KERNEL_FAILURE phase=native kind=control_or_cleanup");
