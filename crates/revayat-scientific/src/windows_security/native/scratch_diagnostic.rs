@@ -54,6 +54,17 @@ unsafe extern "system" {
         sacl: *mut Handle,
         descriptor: *mut Handle,
     ) -> u32;
+    fn AccessCheck(
+        descriptor: *const std::ffi::c_void,
+        token: Handle,
+        desired: u32,
+        mapping: *const u32,
+        privilege_set: *mut u8,
+        privilege_set_length: *mut u32,
+        granted: *mut u32,
+        status: *mut i32,
+    ) -> i32;
+    fn OpenThreadToken(thread: Handle, access: u32, self_open: i32, token: *mut Handle) -> i32;
 }
 #[link(name = "kernel32")]
 unsafe extern "system" {
@@ -67,6 +78,7 @@ unsafe extern "system" {
         template: Handle,
     ) -> Handle;
     fn LocalFree(value: Handle) -> Handle;
+    fn GetCurrentThread() -> Handle;
     fn GetLastError() -> u32;
     fn SetFileInformationByHandle(
         handle: Handle,
@@ -433,7 +445,70 @@ fn policy_probe(
         } else {
             eprintln!("T63 GetSecurityInfo status={status}");
         }
+        // T63b: same read including the SACL (integrity label).
+        let mut descriptor2: Handle = null_mut();
+        let mut owner2: Handle = null_mut();
+        let mut group2: Handle = null_mut();
+        let mut dacl2: Handle = null_mut();
+        let mut sacl2: Handle = null_mut();
+        let status2 = unsafe {
+            GetSecurityInfo(
+                refs.root.0,
+                1,
+                0xF,
+                &mut owner2,
+                &mut group2,
+                &mut dacl2,
+                &mut sacl2,
+                &mut descriptor2,
+            )
+        };
+        if status2 == 0 && !descriptor2.is_null() {
+            let mut text: *mut u16 = null_mut();
+            let mut length = 0u32;
+            let ok = unsafe {
+                ConvertSecurityDescriptorToStringSecurityDescriptorW(
+                    descriptor2,
+                    1,
+                    0xF,
+                    &mut text,
+                    &mut length,
+                )
+            };
+            if ok != 0 && !text.is_null() {
+                let mut count = 0usize;
+                while count < 1024 && unsafe { *text.add(count) } != 0 {
+                    count += 1;
+                }
+                let sddl =
+                    String::from_utf16_lossy(unsafe { std::slice::from_raw_parts(text, count) });
+                eprintln!("T63 root sddl sacl: {sddl}");
+                unsafe {
+                    LocalFree(text.cast());
+                }
+            } else {
+                eprintln!("T63 sacl convert failed err={}", unsafe { GetLastError() });
+            }
+            unsafe {
+                LocalFree(descriptor2);
+            }
+        } else {
+            eprintln!("T63 GetSecurityInfo sacl status={status2}");
+        }
     }
+    // T64 prep: raw descriptors for offline AccessCheck under impersonation.
+    let root_sd = access::security(refs.root.0, 0x17).unwrap_or_default();
+    let device_sd = {
+        let device = format!(r"\\.\{}", volume.drive());
+        match access::Owned::open(Path::new(&device), 0x0002_0000, 0x7, 0) {
+            Ok(mut handle) => {
+                let bytes = access::security(handle.0, 0x17).unwrap_or_default();
+                let _ = handle.close();
+                bytes
+            }
+            Err(_) => Vec::new(),
+        }
+    };
     let mut dirs = [
         NativeRequest::new(volume.native_root(), "lpac", "device"),
         NativeRequest::new(
@@ -444,6 +519,50 @@ fn policy_probe(
     ];
     let mut requests = volume::requests(volume.native_root())?;
     let opened = context.scoped(|| {
+        // T64: offline reference-monitor verdicts for this thread's package token.
+        {
+            let mut token: Handle = null_mut();
+            if unsafe { OpenThreadToken(GetCurrentThread(), 0x8, 0, &mut token) } != 0
+                && !token.is_null()
+            {
+                let mapping: [u32; 4] = [0x0012_0089, 0x0012_0116, 0x0012_00A0, 0x001F_01FF];
+                let mut run = |label: &str, sd: &[u8], desired: u32| {
+                    let mut privileges = [0u8; 256];
+                    let mut length = privileges.len() as u32;
+                    let mut granted = 0u32;
+                    let mut status = 0i32;
+                    let called = unsafe {
+                        AccessCheck(
+                            sd.as_ptr().cast(),
+                            token,
+                            desired,
+                            mapping.as_ptr(),
+                            privileges.as_mut_ptr(),
+                            &mut length,
+                            &mut granted,
+                            &mut status,
+                        )
+                    };
+                    eprintln!(
+                        "T64 ac {label} desired=0x{desired:08X} called={called} status={status} granted=0x{granted:08X}"
+                    );
+                };
+                if !root_sd.is_empty() {
+                    run("root", &root_sd, 0x0000_0002);
+                    run("root", &root_sd, 0x0000_0001);
+                    run("root", &root_sd, 0x0010_0020);
+                }
+                if !device_sd.is_empty() {
+                    run("device", &device_sd, 0x0000_0020);
+                    run("device", &device_sd, 0x0000_0001);
+                }
+                unsafe {
+                    CloseHandle(token);
+                }
+            } else {
+                eprintln!("T64 thread token failed err={}", unsafe { GetLastError() });
+            }
+        }
         context.check(owners)?;
         for request in dirs.iter_mut().chain(requests.iter_mut()) {
             deadline()?;
