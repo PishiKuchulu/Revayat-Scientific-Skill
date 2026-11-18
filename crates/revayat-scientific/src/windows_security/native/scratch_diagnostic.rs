@@ -531,7 +531,7 @@ fn policy_probe(
                 && !token.is_null()
             {
                 let mapping: [u32; 4] = [0x0012_0089, 0x0012_0116, 0x0012_00A0, 0x001F_01FF];
-                let mut run = |label: &str, sd: &[u8], desired: u32| {
+                let run = |label: &str, sd: &[u8], desired: u32| {
                     let mut privileges = [0u8; 256];
                     let mut length = privileges.len() as u32;
                     let mut granted = 0u32;
