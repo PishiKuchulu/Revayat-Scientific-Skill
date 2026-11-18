@@ -361,6 +361,12 @@ impl<'a> NativeCompletion<'a> {
             capture.bytes.len(),
             capture.eof
         );
+        if error {
+            eprintln!(
+                "T50 stderr close backtrace:\n{}",
+                std::backtrace::Backtrace::force_capture()
+            );
+        }
         if reader.0.is_null() {
             capture.end();
         } else if let Err(error) = drain(reader, capture, limit) {
