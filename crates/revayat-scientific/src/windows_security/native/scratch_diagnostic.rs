@@ -35,6 +35,29 @@ unsafe extern "system" {
         options: u32,
     ) -> i32;
 }
+#[link(name = "kernel32")]
+unsafe extern "system" {
+    fn CreateFileW(
+        path: *const u16,
+        access: u32,
+        share: u32,
+        security: *const std::ffi::c_void,
+        creation: u32,
+        flags: u32,
+        template: Handle,
+    ) -> Handle;
+    fn GetLastError() -> u32;
+    fn SetFileInformationByHandle(
+        handle: Handle,
+        class: u32,
+        data: *const std::ffi::c_void,
+        size: u32,
+    ) -> i32;
+    fn CloseHandle(handle: Handle) -> i32;
+}
+fn wide(text: &str) -> Vec<u16> {
+    text.encode_utf16().chain(Some(0)).collect()
+}
 #[derive(Debug)]
 struct ObservationError(scratch::SharedError);
 impl fmt::Display for ObservationError {
@@ -355,6 +378,34 @@ fn policy_probe(
             deadline()?;
             context.check(owners)?;
             open(request, owners)?;
+        }
+        for (tag, mask) in [("w", 0x00000002u32), ("f", 0xC0030080u32)] {
+            let probe_path = wide(&format!("{}t60-{tag}", volume.drive_root()));
+            // SAFETY: fixed probe leaf on the diagnostic's own scratch root under the
+            // scoped impersonation; a created handle is dispositioned and closed here.
+            let handle = unsafe {
+                CreateFileW(
+                    probe_path.as_ptr(),
+                    mask,
+                    3,
+                    null_mut(),
+                    1,
+                    0x00200080,
+                    null_mut(),
+                )
+            };
+            if handle.is_null() || handle as isize == -1 {
+                eprintln!("T60 create {tag} mask=0x{mask:08X} err={}", unsafe {
+                    GetLastError()
+                });
+            } else {
+                let mut flag = 1u8;
+                unsafe {
+                    SetFileInformationByHandle(handle, 4, (&mut flag as *mut u8).cast(), 1);
+                    CloseHandle(handle);
+                }
+                eprintln!("T60 create {tag} mask=0x{mask:08X} ok");
+            }
         }
         context.check(owners)?;
         deadline()
