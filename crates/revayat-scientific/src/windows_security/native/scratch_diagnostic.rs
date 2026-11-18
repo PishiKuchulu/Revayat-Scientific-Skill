@@ -407,6 +407,48 @@ fn policy_probe(
                 eprintln!("T60 create {tag} mask=0x{mask:08X} ok");
             }
         }
+        // T61: distinguish a directory access-check denial from create semantics.
+        for (tag, mask, creation, flags) in [
+            ("open_write", 0x00000002u32, 3u32, 0x02200000u32),
+            ("open_read", 0x00000001u32, 3u32, 0x02200000u32),
+            ("open_trav", 0x00100020u32, 3u32, 0x02200000u32),
+            ("create_temp", 0x00000002u32, 1u32, 0x00200000u32),
+        ] {
+            let probe_path = if tag == "create_temp" {
+                wide(&format!("{}temp\\t61-leaf", volume.drive_root()))
+            } else {
+                wide(volume.drive_root())
+            };
+            // SAFETY: fixed diagnostic paths under the scoped impersonation; any
+            // created leaf is dispositioned and every handle closed before returning.
+            let handle = unsafe {
+                CreateFileW(
+                    probe_path.as_ptr(),
+                    mask,
+                    3,
+                    null_mut(),
+                    creation,
+                    flags,
+                    null_mut(),
+                )
+            };
+            if handle.is_null() || handle as isize == -1 {
+                eprintln!("T61 {tag} mask=0x{mask:08X} err={}", unsafe {
+                    GetLastError()
+                });
+            } else {
+                if creation == 1 {
+                    let mut flag = 1u8;
+                    unsafe {
+                        SetFileInformationByHandle(handle, 4, (&mut flag as *mut u8).cast(), 1);
+                    }
+                }
+                unsafe {
+                    CloseHandle(handle);
+                }
+                eprintln!("T61 {tag} mask=0x{mask:08X} ok");
+            }
+        }
         context.check(owners)?;
         deadline()
     });
