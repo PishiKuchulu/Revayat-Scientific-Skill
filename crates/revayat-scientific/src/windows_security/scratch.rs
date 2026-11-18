@@ -73,6 +73,22 @@ pub fn finish<T>(result: OperationResult<T>, mut cleanup: Vec<SharedError>) -> O
     if let Err(error) = &result {
         cleanup.insert(0, error.clone());
     }
+    fn dump_t37(error: &SharedError, depth: usize) {
+        eprintln!("T37 scratch member depth={depth}: {error}");
+        if let Some(group) = error.downcast_ref::<Failures>() {
+            for member in &group.errors {
+                dump_t37(member, depth + 1);
+            }
+        }
+        let mut source = error.source();
+        while let Some(inner) = source {
+            eprintln!("T37 scratch source depth={depth}: {inner}");
+            source = inner.source();
+        }
+    }
+    for member in &cleanup {
+        dump_t37(member, 0);
+    }
     Err(Arc::new(Failures { errors: cleanup }))
 }
 pub fn attempt(errors: &mut Vec<SharedError>, operation: impl FnOnce() -> OperationResult<()>) {
