@@ -396,6 +396,7 @@ fn policy_probe(
     owners: &ProbeOwners,
     deadline: &dyn Fn() -> Result<()>,
 ) -> Result<Vec<i32>> {
+    static T81_ROOTS: std::sync::Mutex<String> = std::sync::Mutex::new(String::new());
     // T63: dump the landed root descriptor as SDDL (host context).
     {
         let mut descriptor: Handle = null_mut();
@@ -1080,7 +1081,9 @@ fn policy_probe(
                 }
                 Err(error) => eprintln!("T81 B failed: {error}"),
             }
-            let _ = std::fs::write("C:\\t81_roots.txt", roots);
+            if let Ok(mut slot) = T81_ROOTS.lock() {
+                *slot = roots;
+            }
         }
     }
     // T76: persistently grant the package FA on the VOLUME device itself
@@ -2077,8 +2080,8 @@ fn policy_probe(
         }
         // T81: create inside each replica volume's test directory.
         {
-            if let Ok(roots) = std::fs::read_to_string("C:\\t81_roots.txt")
-            {
+            let roots = T81_ROOTS.lock().map(|slot| slot.clone()).unwrap_or_default();
+            if !roots.is_empty() {
                 let stamp = std::time::SystemTime::now()
                     .duration_since(std::time::UNIX_EPOCH)
                     .map(|d| d.as_nanos())
