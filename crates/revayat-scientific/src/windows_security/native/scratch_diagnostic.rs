@@ -867,13 +867,6 @@ fn policy_probe(
                 descriptor: *mut Handle,
                 size: *mut u32,
             ) -> i32;
-            fn ConvertSecurityDescriptorToStringSecurityDescriptorW(
-                descriptor: Handle,
-                revision: u32,
-                fields: u32,
-                text: *mut *mut u16,
-                length: *mut u32,
-            ) -> i32;
             fn GetSecurityDescriptorDacl(
                 descriptor: Handle,
                 present: *mut i32,
@@ -896,14 +889,14 @@ fn policy_probe(
                 sacl: Handle,
             ) -> u32;
             fn GetNamedSecurityInfoW(
-                path: *mut u16,
+                path: *const u16,
                 kind: i32,
                 fields: u32,
-                owner: *mut Handle,
-                group: *mut Handle,
-                dacl: *mut Handle,
-                sacl: *mut Handle,
-                descriptor: *mut Handle,
+                owner: *mut *mut std::ffi::c_void,
+                group: *mut *mut std::ffi::c_void,
+                dacl: *mut *mut std::ffi::c_void,
+                sacl: *mut *mut std::ffi::c_void,
+                descriptor: *mut *mut std::ffi::c_void,
             ) -> u32;
         }
         let pkg = volume.package_sid().to_string();
@@ -997,11 +990,11 @@ fn policy_probe(
             .map(str::to_string)
         {
             for target in [root_a.clone(), format!("{root_a}t81dir")] {
-                let mut p = wide(&target);
-                let mut descriptor: Handle = null_mut();
+                let p = wide(&target);
+                let mut descriptor: *mut std::ffi::c_void = null_mut();
                 let status = unsafe {
                     GetNamedSecurityInfoW(
-                        p.as_mut_ptr(),
+                        p.as_ptr(),
                         1,
                         0x1F,
                         null_mut(),
@@ -1016,7 +1009,7 @@ fn policy_probe(
                     let mut length = 0u32;
                     let ok = unsafe {
                         ConvertSecurityDescriptorToStringSecurityDescriptorW(
-                            descriptor,
+                            descriptor.cast_const(),
                             1,
                             0x1F,
                             &mut text,
