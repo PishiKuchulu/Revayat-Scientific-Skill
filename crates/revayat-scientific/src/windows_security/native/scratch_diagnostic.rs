@@ -679,6 +679,139 @@ fn policy_probe(
             );
         }
     }
+    // T70: host-side truth about a fresh child directory: its landed DACL, which
+    // open masks the host itself gets, and AccessCheck on the full create masks.
+    {
+        let dir = format!("{}t70", volume.drive_root());
+        let _ = std::fs::create_dir(&dir);
+        let path = wide(&dir);
+        let handle = unsafe {
+            CreateFileW(
+                path.as_ptr(),
+                0x80,
+                7,
+                null_mut(),
+                3,
+                0x0200_0000,
+                null_mut(),
+            )
+        };
+        if !handle.is_null() && handle as isize != -1 {
+            if let Ok(bytes) = access::security(handle, 0x17) {
+                let mut text: *mut u16 = null_mut();
+                let mut length = 0u32;
+                let ok = unsafe {
+                    ConvertSecurityDescriptorToStringSecurityDescriptorW(
+                        bytes.as_ptr().cast(),
+                        1,
+                        0x17,
+                        &mut text,
+                        &mut length,
+                    )
+                };
+                if ok != 0 && !text.is_null() {
+                    let mut count = 0usize;
+                    while count < 1024 && unsafe { *text.add(count) } != 0 {
+                        count += 1;
+                    }
+                    let sddl = String::from_utf16_lossy(unsafe {
+                        std::slice::from_raw_parts(text, count)
+                    });
+                    eprintln!("T70 child sddl: {sddl}");
+                    unsafe {
+                        LocalFree(text.cast());
+                    }
+                } else {
+                    eprintln!("T70 child convert failed");
+                }
+            } else {
+                eprintln!("T70 child security read failed");
+            }
+            unsafe {
+                CloseHandle(handle);
+            }
+        } else {
+            eprintln!("T70 child open80 failed err={}", unsafe { GetLastError() });
+        }
+        for mask in [0x0002_0000u32, 0x0004_0000, 0x0010_0020, 0x1, 0x2] {
+            let probe = unsafe {
+                CreateFileW(
+                    path.as_ptr(),
+                    mask,
+                    7,
+                    null_mut(),
+                    3,
+                    0x0200_0000,
+                    null_mut(),
+                )
+            };
+            if probe.is_null() || probe as isize == -1 {
+                eprintln!("T70 open mask=0x{mask:08X} err={}", unsafe {
+                    GetLastError()
+                });
+            } else {
+                unsafe {
+                    CloseHandle(probe);
+                }
+                eprintln!("T70 open mask=0x{mask:08X} ok");
+            }
+        }
+        for mask in [0x0013_01BFu32, 0xC003_0080] {
+            let leaf = wide(&format!("{dir}\\leaf{mask:X}"));
+            let probe =
+                unsafe { CreateFileW(leaf.as_ptr(), mask, 3, null_mut(), 1, 0x80, null_mut()) };
+            if probe.is_null() || probe as isize == -1 {
+                eprintln!("T70 create mask=0x{mask:08X} err={}", unsafe {
+                    GetLastError()
+                });
+            } else {
+                unsafe {
+                    CloseHandle(probe);
+                }
+                eprintln!("T70 create mask=0x{mask:08X} ok");
+            }
+        }
+        // AccessCheck with the host's own token on the root descriptor.
+        #[link(name = "advapi32")]
+        unsafe extern "system" {
+            fn OpenProcessToken(process: Handle, access: u32, token: *mut Handle) -> i32;
+        }
+        #[link(name = "kernel32")]
+        unsafe extern "system" {
+            fn GetCurrentProcess() -> Handle;
+        }
+        let mut process_token: Handle = null_mut();
+        let opened_token = unsafe { OpenProcessToken(GetCurrentProcess(), 8, &mut process_token) };
+        if opened_token != 0 && !process_token.is_null() {
+            let mapping: [u32; 4] = [0x0012_0089, 0x0012_0116, 0x0012_00A0, 0x001F_01FF];
+            for desired in [0xC003_0080u32, 0x0013_01BF, 0x0001_0000] {
+                let mut privileges = [0u8; 256];
+                let mut length = privileges.len() as u32;
+                let mut granted = 0u32;
+                let mut status = 0i32;
+                let called = unsafe {
+                    AccessCheck(
+                        root_sd.as_ptr().cast(),
+                        process_token,
+                        desired,
+                        mapping.as_ptr(),
+                        privileges.as_mut_ptr(),
+                        &mut length,
+                        &mut granted,
+                        &mut status,
+                    )
+                };
+                eprintln!(
+                    "T70 ac-host desired=0x{desired:08X} called={called} status={status} granted=0x{granted:08X}"
+                );
+            }
+            unsafe {
+                CloseHandle(process_token);
+            }
+        } else {
+            eprintln!("T70 host token open failed");
+        }
+    }
     let opened = context.scoped(|| {
         // T64: offline reference-monitor verdicts for this thread's package token.
         {
