@@ -610,6 +610,8 @@ fn policy_probe(
                 data: *const std::ffi::c_void,
             ) -> i32;
         }
+        let _restore_guard = access::ManageVolume::acquire_optional("SeRestorePrivilege");
+        let _take_guard = access::ManageVolume::acquire_optional("SeTakeOwnershipPrivilege");
         let pkg = volume.package_sid();
         let host_sid = &volume.intent.host;
         let variants = [
@@ -652,7 +654,7 @@ fn policy_probe(
                 let handle = unsafe {
                     CreateFileW(
                         path.as_ptr(),
-                        0x0006_0000,
+                        0x0006_0080,
                         7,
                         null_mut(),
                         3,
