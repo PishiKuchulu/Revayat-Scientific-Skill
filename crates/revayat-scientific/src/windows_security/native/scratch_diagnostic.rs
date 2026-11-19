@@ -681,6 +681,175 @@ fn policy_probe(
             );
         }
     }
+    // T73: identify the VHD's disk device, dump its descriptor, append a package
+    // ACE to its DACL host-side; the scoped block then retries the temp create.
+    {
+        #[link(name = "kernel32")]
+        unsafe extern "system" {
+            fn DeviceIoControl(
+                handle: Handle,
+                code: u32,
+                input: *const std::ffi::c_void,
+                in_len: u32,
+                output: *mut std::ffi::c_void,
+                out_len: u32,
+                returned: *mut u32,
+                overlapped: *mut std::ffi::c_void,
+            ) -> i32;
+        }
+        #[link(name = "advapi32")]
+        unsafe extern "system" {
+            fn ConvertStringSecurityDescriptorToSecurityDescriptorW(
+                text: *const u16,
+                revision: u32,
+                descriptor: *mut Handle,
+                size: *mut u32,
+            ) -> i32;
+            fn GetSecurityDescriptorDacl(
+                descriptor: Handle,
+                present: *mut i32,
+                dacl: *mut Handle,
+                defaulted: *mut i32,
+            ) -> i32;
+            fn SetNamedSecurityInfoW(
+                path: *mut u16,
+                kind: i32,
+                fields: u32,
+                owner: Handle,
+                group: Handle,
+                dacl: Handle,
+                sacl: Handle,
+            ) -> u32;
+        }
+        let drive = volume.drive_root()[..2].to_string();
+        let dos = format!("\\\\.\\{drive}");
+        let path = wide(&dos);
+        let handle =
+            unsafe { CreateFileW(path.as_ptr(), 0x8000_0000, 7, null_mut(), 3, 0, null_mut()) };
+        if handle.is_null() || handle as isize == -1 {
+            eprintln!("T73 volume open failed err={}", unsafe { GetLastError() });
+        } else {
+            #[repr(C)]
+            #[derive(Default)]
+            struct DevNum {
+                kind: u32,
+                number: u32,
+                partition: u32,
+            }
+            let mut info = DevNum::default();
+            let mut returned = 0u32;
+            let ok = unsafe {
+                DeviceIoControl(
+                    handle,
+                    0x002D_1080,
+                    null_mut(),
+                    0,
+                    (&mut info as *mut DevNum).cast(),
+                    std::mem::size_of::<DevNum>() as u32,
+                    &mut returned,
+                    null_mut(),
+                )
+            };
+            eprintln!(
+                "T73 ioctl ok={ok} type={} number={} partition={}",
+                info.kind, info.number, info.partition
+            );
+            if ok != 0 {
+                let physical = format!("\\\\.\\PhysicalDrive{}", info.number);
+                let ppath = wide(&physical);
+                let disk =
+                    unsafe { CreateFileW(ppath.as_ptr(), 0x80, 7, null_mut(), 3, 0, null_mut()) };
+                if disk.is_null() || disk as isize == -1 {
+                    eprintln!("T73 disk open failed err={}", unsafe { GetLastError() });
+                } else {
+                    if let Ok(bytes) = access::security(disk, 0x17) {
+                        let mut text: *mut u16 = null_mut();
+                        let mut length = 0u32;
+                        let cok = unsafe {
+                            ConvertSecurityDescriptorToStringSecurityDescriptorW(
+                                bytes.as_ptr().cast(),
+                                1,
+                                0x17,
+                                &mut text,
+                                &mut length,
+                            )
+                        };
+                        if cok != 0 && !text.is_null() {
+                            let mut count = 0usize;
+                            while count < 1024 && unsafe { *text.add(count) } != 0 {
+                                count += 1;
+                            }
+                            let sddl = String::from_utf16_lossy(unsafe {
+                                std::slice::from_raw_parts(text, count)
+                            });
+                            eprintln!("T73 disk sddl: {sddl}");
+                            // Append the package ACE to the DACL portion and set it.
+                            let pkg = volume.package_sid();
+                            let ace = format!("(A;;0x001301BF;;;{pkg})");
+                            let patched = match sddl.find("S:") {
+                                Some(at) => format!("{}{ace}{}", &sddl[..at], &sddl[at..]),
+                                None => format!("{sddl}{ace}"),
+                            };
+                            let ptext = wide(&patched);
+                            let mut raw: Handle = null_mut();
+                            let mut nbytes = 0u32;
+                            let converted = unsafe {
+                                ConvertStringSecurityDescriptorToSecurityDescriptorW(
+                                    ptext.as_ptr(),
+                                    1,
+                                    &mut raw,
+                                    &mut nbytes,
+                                )
+                            };
+                            let mut dacl: Handle = null_mut();
+                            let mut present = 0i32;
+                            let mut defaulted = 0i32;
+                            let mut stage = 0xFFFF_FFFFu32;
+                            if converted != 0
+                                && !raw.is_null()
+                                && unsafe {
+                                    GetSecurityDescriptorDacl(
+                                        raw,
+                                        &mut present,
+                                        &mut dacl,
+                                        &mut defaulted,
+                                    )
+                                } != 0
+                            {
+                                let mut target = wide(&physical);
+                                stage = unsafe {
+                                    SetNamedSecurityInfoW(
+                                        target.as_mut_ptr(),
+                                        1,
+                                        0x4,
+                                        null_mut(),
+                                        null_mut(),
+                                        dacl,
+                                        null_mut(),
+                                    )
+                                };
+                            }
+                            eprintln!("T73 disk patch stage=0x{stage:08X}");
+                            if !raw.is_null() {
+                                unsafe {
+                                    LocalFree(raw);
+                                }
+                            }
+                            unsafe {
+                                LocalFree(text.cast());
+                            }
+                        }
+                    }
+                    unsafe {
+                        CloseHandle(disk);
+                    }
+                }
+            }
+            unsafe {
+                CloseHandle(handle);
+            }
+        }
+    }
     // T72 setup: control directory on the system drive (temp dir), DACL grants the
     // package FA, label Low — same impersonated create runs against it in the
     // scoped block, splitting volume-stack vs token/profile causes.
@@ -1424,6 +1593,21 @@ fn policy_probe(
                     CloseHandle(handle);
                 }
                 eprintln!("T72 ctl open_write ok");
+            }
+        }
+        // T73: after the host-side disk-device patch, retry the temp create.
+        {
+            let path = wide(&format!("{}temp\\leaf-t73", volume.drive_root()));
+            let handle = unsafe {
+                CreateFileW(path.as_ptr(), 0xC003_0080, 3, null_mut(), 1, 0x80, null_mut())
+            };
+            if handle.is_null() || handle as isize == -1 {
+                eprintln!("T73 temp create err={}", unsafe { GetLastError() });
+            } else {
+                unsafe {
+                    CloseHandle(handle);
+                }
+                eprintln!("T73 temp create ok");
             }
         }
         // T68: the impersonation token's user and AppContainer SIDs as strings.
