@@ -855,6 +855,234 @@ fn policy_probe(
             }
         }
     }
+    // T81: replica volumes, built once per process. A attaches with a NULL
+    // descriptor, B with the Fix #1 descriptor; both then follow the design's own
+    // sequence (GPT initialize, format.com NTFS, mount point) and get one test
+    // directory with the C:-proven package-FA DACL + Low label. Roots are recorded
+    // in a temp file for the scoped create probes.
+    {
+        use std::sync::atomic::{AtomicBool, Ordering};
+        static T81_DONE: AtomicBool = AtomicBool::new(false);
+        if !T81_DONE.swap(true, Ordering::SeqCst) {
+            #[link(name = "advapi32")]
+            unsafe extern "system" {
+                fn ConvertStringSecurityDescriptorToSecurityDescriptorW(
+                    text: *const u16,
+                    revision: u32,
+                    descriptor: *mut Handle,
+                    size: *mut u32,
+                ) -> i32;
+                fn GetSecurityDescriptorDacl(
+                    descriptor: Handle,
+                    present: *mut i32,
+                    dacl: *mut Handle,
+                    defaulted: *mut i32,
+                ) -> i32;
+                fn GetSecurityDescriptorSacl(
+                    descriptor: Handle,
+                    present: *mut i32,
+                    sacl: *mut Handle,
+                    defaulted: *mut i32,
+                ) -> i32;
+                fn SetNamedSecurityInfoW(
+                    path: *mut u16,
+                    kind: i32,
+                    fields: u32,
+                    owner: Handle,
+                    group: Handle,
+                    dacl: Handle,
+                    sacl: Handle,
+                ) -> u32;
+            }
+            use windows::{
+                Win32::{Foundation::HANDLE, Security::PSECURITY_DESCRIPTOR, Storage::Vhd::*},
+                core::{GUID, PCWSTR},
+            };
+            let pkg = volume.package_sid().to_string();
+            let build = |tag: &str,
+                         descriptor_sddl: Option<&str>,
+                         vhd_id: u128,
+                         gpt_id: u128,
+                         part_id: u128|
+             -> Result<String> {
+                let image = std::env::temp_dir().join(format!("t81{tag}.vhdx"));
+                let _ = std::fs::remove_file(&image);
+                let path = wide(&image.to_string_lossy());
+                let storage_type = VIRTUAL_STORAGE_TYPE {
+                    DeviceId: 3,
+                    VendorId: GUID::from_u128(0xec984aec_a0f9_47e9_901f_71415a66345b),
+                };
+                let parameters = CREATE_VIRTUAL_DISK_PARAMETERS {
+                    Version: CREATE_VIRTUAL_DISK_VERSION_2,
+                    Anonymous: CREATE_VIRTUAL_DISK_PARAMETERS_0 {
+                        Version2: CREATE_VIRTUAL_DISK_PARAMETERS_0_1 {
+                            UniqueId: GUID::from_u128(vhd_id),
+                            MaximumSize: scratch_layout::CAPACITY,
+                            ..Default::default()
+                        },
+                    },
+                };
+                let mut handle = HANDLE::default();
+                let status = unsafe {
+                    CreateVirtualDisk(
+                        &storage_type,
+                        PCWSTR(path.as_ptr()),
+                        VIRTUAL_DISK_ACCESS_NONE,
+                        None,
+                        CREATE_VIRTUAL_DISK_FLAG_FULL_PHYSICAL_ALLOCATION,
+                        0,
+                        &parameters,
+                        None,
+                        &mut handle,
+                    )
+                };
+                ensure!(status.0 == 0, "T81 {tag} create status={}", status.0);
+                let mut descriptor = match descriptor_sddl {
+                    Some(sddl) => Some(super::authority::Descriptor::new(sddl)?),
+                    None => None,
+                };
+                let attach_parameters = ATTACH_VIRTUAL_DISK_PARAMETERS {
+                    Version: ATTACH_VIRTUAL_DISK_VERSION_1,
+                    ..Default::default()
+                };
+                let status = unsafe {
+                    AttachVirtualDisk(
+                        handle,
+                        descriptor.as_mut().map(|d| PSECURITY_DESCRIPTOR(d.0)),
+                        ATTACH_VIRTUAL_DISK_FLAG_NO_DRIVE_LETTER
+                            | ATTACH_VIRTUAL_DISK_FLAG_PERMANENT_LIFETIME,
+                        0,
+                        Some(&attach_parameters),
+                        None,
+                    )
+                };
+                if let Some(mut d) = descriptor.take() {
+                    let _ = d.close();
+                }
+                ensure!(status.0 == 0, "T81 {tag} attach status={}", status.0);
+                let disk_path = super::scratch_disk::attached_path(handle.0)?
+                    .ok_or_else(|| anyhow::anyhow!("T81 {tag} did not attach"))?;
+                let (raw, number) = scratch_layout::disk(&disk_path)?;
+                let binding = scratch_layout::initialize(
+                    raw.0,
+                    number,
+                    scratch_layout::guid(&format!("{:?}", GUID::from_u128(gpt_id)))?,
+                    scratch_layout::guid(&format!("{:?}", GUID::from_u128(part_id)))?,
+                )?;
+                scratch_layout::format(&binding, &std::env::temp_dir())?;
+                let root = scratch_layout::choose_drive()?;
+                scratch_layout::mount(&binding, &root)?;
+                let dir = format!("{root}t81dir");
+                std::fs::create_dir(&dir)?;
+                let sddl = format!("D:P(A;;FA;;;{pkg})(A;;FA;;;BA)");
+                let text = wide(&sddl);
+                let mut raw_sd: Handle = null_mut();
+                let mut nbytes = 0u32;
+                let converted = unsafe {
+                    ConvertStringSecurityDescriptorToSecurityDescriptorW(
+                        text.as_ptr(),
+                        1,
+                        &mut raw_sd,
+                        &mut nbytes,
+                    )
+                };
+                let mut dacl: Handle = null_mut();
+                let mut sacl: Handle = null_mut();
+                let mut present = 0i32;
+                let mut defaulted = 0i32;
+                if converted != 0
+                    && !raw_sd.is_null()
+                    && unsafe {
+                        GetSecurityDescriptorDacl(raw_sd, &mut present, &mut dacl, &mut defaulted)
+                    } != 0
+                {
+                    let mut p = wide(&dir);
+                    let stage = unsafe {
+                        SetNamedSecurityInfoW(
+                            p.as_mut_ptr(),
+                            1,
+                            0x4,
+                            null_mut(),
+                            null_mut(),
+                            dacl,
+                            null_mut(),
+                        )
+                    };
+                    ensure!(stage == 0, "T81 {tag} dacl stage={stage}");
+                }
+                if !raw_sd.is_null() {
+                    unsafe {
+                        LocalFree(raw_sd);
+                    }
+                }
+                let text = wide("S:(ML;;NW;;;LW)");
+                let mut raw_sd: Handle = null_mut();
+                let converted = unsafe {
+                    ConvertStringSecurityDescriptorToSecurityDescriptorW(
+                        text.as_ptr(),
+                        1,
+                        &mut raw_sd,
+                        &mut nbytes,
+                    )
+                };
+                if converted != 0
+                    && !raw_sd.is_null()
+                    && unsafe {
+                        GetSecurityDescriptorSacl(raw_sd, &mut present, &mut sacl, &mut defaulted)
+                    } != 0
+                    && present != 0
+                {
+                    let mut p = wide(&dir);
+                    let stage = unsafe {
+                        SetNamedSecurityInfoW(
+                            p.as_mut_ptr(),
+                            1,
+                            0x10,
+                            null_mut(),
+                            null_mut(),
+                            null_mut(),
+                            sacl,
+                        )
+                    };
+                    ensure!(stage == 0, "T81 {tag} label stage={stage}");
+                }
+                if !raw_sd.is_null() {
+                    unsafe {
+                        LocalFree(raw_sd);
+                    }
+                }
+                Ok(root)
+            };
+            let mut roots = String::new();
+            match build(
+                "A",
+                None,
+                0x81810001_1111_4000_8000_000000000001,
+                0x81810002_1111_4000_8000_000000000002,
+                0x81810003_1111_4000_8000_000000000003,
+            ) {
+                Ok(root) => {
+                    eprintln!("T81 A ready root={root}");
+                    roots.push_str(&format!("A={root}\n"));
+                }
+                Err(error) => eprintln!("T81 A failed: {error}"),
+            }
+            match build(
+                "B",
+                Some("D:(A;;FX;;;WD)(A;;FA;;;SY)(A;;FA;;;BA)(A;;FX;;;RC)"),
+                0x81810004_1111_4000_8000_000000000004,
+                0x81810005_1111_4000_8000_000000000005,
+                0x81810006_1111_4000_8000_000000000006,
+            ) {
+                Ok(root) => {
+                    eprintln!("T81 B ready root={root}");
+                    roots.push_str(&format!("B={root}\n"));
+                }
+                Err(error) => eprintln!("T81 B failed: {error}"),
+            }
+            let _ = std::fs::write(std::env::temp_dir().join("t81_roots.txt"), roots);
+        }
+    }
     // T76: persistently grant the package FA on the VOLUME device itself
     // (stronger than the lease's 0x1301BF), then the scoped temp create retries.
     {
@@ -1844,6 +2072,40 @@ fn policy_probe(
                         CloseHandle(handle);
                     }
                     eprintln!("T74 dev mask=0x{mask:08X} ok");
+                }
+            }
+        }
+        // T81: create inside each replica volume's test directory.
+        {
+            if let Ok(roots) = std::fs::read_to_string(std::env::temp_dir().join("t81_roots.txt"))
+            {
+                let stamp = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map(|d| d.as_nanos())
+                    .unwrap_or(0);
+                for line in roots.lines() {
+                    if let Some((tag, root)) = line.split_once('=') {
+                        let path = wide(&format!("{root}t81dir\\leaf-{stamp}"));
+                        let handle = unsafe {
+                            CreateFileW(
+                                path.as_ptr(),
+                                0xC003_0080,
+                                3,
+                                null_mut(),
+                                1,
+                                0x80,
+                                null_mut(),
+                            )
+                        };
+                        if handle.is_null() || handle as isize == -1 {
+                            eprintln!("T81 {tag} create err={}", unsafe { GetLastError() });
+                        } else {
+                            unsafe {
+                                CloseHandle(handle);
+                            }
+                            eprintln!("T81 {tag} create ok");
+                        }
+                    }
                 }
             }
         }
