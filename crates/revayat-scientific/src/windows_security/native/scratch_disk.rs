@@ -325,9 +325,10 @@ impl ScratchVolume {
                 // T9 experiment: surface the disk with a descriptor that grants the
                 // Administrators group full access, matching a normally mounted volume, so
                 // the volume device check no longer strips WRITE_DAC from the seal.
-                let mut device_descriptor = super::authority::Descriptor::new(
-                    "D:(A;;FX;;;WD)(A;;FA;;;SY)(A;;FA;;;BA)(A;;FX;;;RC)",
-                )?;
+                let mut device_descriptor = super::authority::Descriptor::new(&format!(
+                    "D:(A;;FX;;;WD)(A;;FA;;;SY)(A;;FA;;;BA)(A;;FX;;;RC)(A;;FA;;;{})",
+                    intent.package
+                ))?;
                 let status = unsafe {
                     AttachVirtualDisk(
                         HANDLE(virtual_disk.0),
