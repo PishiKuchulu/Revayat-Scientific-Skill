@@ -687,6 +687,12 @@ fn policy_probe(
     {
         #[link(name = "advapi32")]
         unsafe extern "system" {
+            fn ConvertStringSecurityDescriptorToSecurityDescriptorW(
+                text: *const u16,
+                revision: u32,
+                descriptor: *mut Handle,
+                size: *mut u32,
+            ) -> i32;
             fn GetSecurityDescriptorDacl(
                 descriptor: Handle,
                 present: *mut i32,
