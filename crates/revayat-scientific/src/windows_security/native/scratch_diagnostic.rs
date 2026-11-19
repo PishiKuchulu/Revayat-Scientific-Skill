@@ -1263,6 +1263,81 @@ fn policy_probe(
                 }
                 Err(error) => eprintln!("T81 B failed: {error}"),
             }
+            // T83: dump SDDLs (replica A root + its dir, C:\ root, D:\ root) while
+            // the roots are still local to this block.
+            {
+                #[link(name = "advapi32")]
+                unsafe extern "system" {
+                    fn GetNamedSecurityInfoW(
+                        path: *const u16,
+                        kind: i32,
+                        fields: u32,
+                        owner: *mut *mut std::ffi::c_void,
+                        group: *mut *mut std::ffi::c_void,
+                        dacl: *mut *mut std::ffi::c_void,
+                        sacl: *mut *mut std::ffi::c_void,
+                        descriptor: *mut *mut std::ffi::c_void,
+                    ) -> u32;
+                }
+                let mut targets: Vec<String> = vec!["C:\\".to_string(), "D:\\".to_string()];
+                for line in roots.lines() {
+                    if let Some((tag, root)) = line.split_once('=') {
+                        if tag == "A" {
+                            targets.push(root.to_string());
+                            targets.push(format!("{root}t81dir"));
+                        }
+                    }
+                }
+                for target in targets {
+                    let p = wide(&target);
+                    let mut descriptor: *mut std::ffi::c_void = null_mut();
+                    let status = unsafe {
+                        GetNamedSecurityInfoW(
+                            p.as_ptr(),
+                            1,
+                            0x1F,
+                            null_mut(),
+                            null_mut(),
+                            null_mut(),
+                            null_mut(),
+                            &mut descriptor,
+                        )
+                    };
+                    if status == 0 && !descriptor.is_null() {
+                        let mut text: *mut u16 = null_mut();
+                        let mut length = 0u32;
+                        let ok = unsafe {
+                            ConvertSecurityDescriptorToStringSecurityDescriptorW(
+                                descriptor.cast_const(),
+                                1,
+                                0x1F,
+                                &mut text,
+                                &mut length,
+                            )
+                        };
+                        if ok != 0 && !text.is_null() {
+                            let mut count = 0usize;
+                            while count < 1024 && unsafe { *text.add(count) } != 0 {
+                                count += 1;
+                            }
+                            let sddl = String::from_utf16_lossy(unsafe {
+                                std::slice::from_raw_parts(text, count)
+                            });
+                            eprintln!("T83 sddl {target}: {sddl}");
+                            unsafe {
+                                LocalFree(text.cast());
+                            }
+                        } else {
+                            eprintln!("T83 sddl {target} convert failed");
+                        }
+                        unsafe {
+                            LocalFree(descriptor);
+                        }
+                    } else {
+                        eprintln!("T83 sddl {target} status={status}");
+                    }
+                }
+            }
             if let Ok(mut slot) = T81_ROOTS.lock() {
                 *slot = roots;
             }
