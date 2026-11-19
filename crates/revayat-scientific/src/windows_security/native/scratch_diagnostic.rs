@@ -855,6 +855,100 @@ fn policy_probe(
             }
         }
     }
+    // T76: persistently grant the package FA on the VOLUME device itself
+    // (stronger than the lease's 0x1301BF), then the scoped temp create retries.
+    {
+        #[link(name = "advapi32")]
+        unsafe extern "system" {
+            fn ConvertStringSecurityDescriptorToSecurityDescriptorW(
+                text: *const u16,
+                revision: u32,
+                descriptor: *mut Handle,
+                size: *mut u32,
+            ) -> i32;
+        }
+        #[link(name = "ntdll")]
+        unsafe extern "system" {
+            fn NtSetSecurityObject(
+                handle: Handle,
+                fields: u32,
+                data: *const std::ffi::c_void,
+            ) -> i32;
+        }
+        let _restore76 = access::ManageVolume::acquire_optional("SeRestorePrivilege");
+        let _take76 = access::ManageVolume::acquire_optional("SeTakeOwnershipPrivilege");
+        let target = volume
+            .ready
+            .mount
+            .binding
+            .volume
+            .trim_end_matches('\\')
+            .to_string();
+        let mut handle = match access::Owned::open(std::path::Path::new(&target), 0x0006_0000, 3, 0)
+        {
+            Ok(handle) => handle,
+            Err(error) => {
+                eprintln!("T76 volume open failed: {error}");
+                access::Owned(null_mut())
+            }
+        };
+        if !handle.0.is_null() {
+            match access::security(handle.0, 0x5) {
+                Ok(bytes) => {
+                    let mut text: *mut u16 = null_mut();
+                    let mut length = 0u32;
+                    let cok = unsafe {
+                        ConvertSecurityDescriptorToStringSecurityDescriptorW(
+                            bytes.as_ptr().cast(),
+                            1,
+                            0x5,
+                            &mut text,
+                            &mut length,
+                        )
+                    };
+                    if cok != 0 && !text.is_null() {
+                        let mut count = 0usize;
+                        while count < 1024 && unsafe { *text.add(count) } != 0 {
+                            count += 1;
+                        }
+                        let sddl = String::from_utf16_lossy(unsafe {
+                            std::slice::from_raw_parts(text, count)
+                        });
+                        let pkg = volume.package_sid();
+                        let ace = format!("(A;;FA;;;{pkg})");
+                        let patched = match sddl.find("S:") {
+                            Some(at) => format!("{}{ace}{}", &sddl[..at], &sddl[at..]),
+                            None => format!("{sddl}{ace}"),
+                        };
+                        let ptext = wide(&patched);
+                        let mut raw: Handle = null_mut();
+                        let mut nbytes = 0u32;
+                        let converted = unsafe {
+                            ConvertStringSecurityDescriptorToSecurityDescriptorW(
+                                ptext.as_ptr(),
+                                1,
+                                &mut raw,
+                                &mut nbytes,
+                            )
+                        };
+                        let mut status = -1i32;
+                        if converted != 0 && !raw.is_null() {
+                            status = unsafe { NtSetSecurityObject(handle.0, 4, raw) };
+                            unsafe {
+                                LocalFree(raw);
+                            }
+                        }
+                        eprintln!("T76 volume patch status=0x{status:08X} base={sddl}");
+                        unsafe {
+                            LocalFree(text.cast());
+                        }
+                    }
+                }
+                Err(error) => eprintln!("T76 volume security read failed: {error}"),
+            }
+            let _ = handle.close();
+        }
+    }
     // T75 setup: control directory at the system drive ROOT (outside any profile).
     {
         #[link(name = "advapi32")]
