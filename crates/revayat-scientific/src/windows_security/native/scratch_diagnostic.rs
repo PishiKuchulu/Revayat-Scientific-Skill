@@ -1080,7 +1080,7 @@ fn policy_probe(
                 }
                 Err(error) => eprintln!("T81 B failed: {error}"),
             }
-            let _ = std::fs::write(std::env::temp_dir().join("t81_roots.txt"), roots);
+            let _ = std::fs::write("C:\\t81_roots.txt", roots);
         }
     }
     // T76: persistently grant the package FA on the VOLUME device itself
@@ -2077,7 +2077,7 @@ fn policy_probe(
         }
         // T81: create inside each replica volume's test directory.
         {
-            if let Ok(roots) = std::fs::read_to_string(std::env::temp_dir().join("t81_roots.txt"))
+            if let Ok(roots) = std::fs::read_to_string("C:\\t81_roots.txt")
             {
                 let stamp = std::time::SystemTime::now()
                     .duration_since(std::time::UNIX_EPOCH)
