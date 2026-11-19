@@ -1615,6 +1615,26 @@ fn policy_probe(
                 eprintln!("T73 temp create ok");
             }
         }
+        // T74: open the volume device itself with data-class masks, per phase.
+        {
+            let dos = format!("\\\\.\\{}", &volume.drive_root()[..2]);
+            for mask in [0xC003_0080u32, 0x0013_01BF, 0x0012_019F, 0x2, 0x1] {
+                let path = wide(&dos);
+                let handle = unsafe {
+                    CreateFileW(path.as_ptr(), mask, 7, null_mut(), 3, 0, null_mut())
+                };
+                if handle.is_null() || handle as isize == -1 {
+                    eprintln!("T74 dev mask=0x{mask:08X} err={}", unsafe {
+                        GetLastError()
+                    });
+                } else {
+                    unsafe {
+                        CloseHandle(handle);
+                    }
+                    eprintln!("T74 dev mask=0x{mask:08X} ok");
+                }
+            }
+        }
         // T68: the impersonation token's user and AppContainer SIDs as strings.
         {
             unsafe extern "system" {
