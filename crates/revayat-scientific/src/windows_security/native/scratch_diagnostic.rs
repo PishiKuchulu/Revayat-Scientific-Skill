@@ -856,6 +856,195 @@ fn policy_probe(
             }
         }
     }
+    // T82 host: control directory on D:\ (real disk volume) with the package-FA
+    // DACL + Low label, and SDDL dumps of replica A's root and test directory.
+    {
+        #[link(name = "advapi32")]
+        unsafe extern "system" {
+            fn ConvertStringSecurityDescriptorToSecurityDescriptorW(
+                text: *const u16,
+                revision: u32,
+                descriptor: *mut Handle,
+                size: *mut u32,
+            ) -> i32;
+            fn ConvertSecurityDescriptorToStringSecurityDescriptorW(
+                descriptor: Handle,
+                revision: u32,
+                fields: u32,
+                text: *mut *mut u16,
+                length: *mut u32,
+            ) -> i32;
+            fn GetSecurityDescriptorDacl(
+                descriptor: Handle,
+                present: *mut i32,
+                dacl: *mut Handle,
+                defaulted: *mut i32,
+            ) -> i32;
+            fn GetSecurityDescriptorSacl(
+                descriptor: Handle,
+                present: *mut i32,
+                sacl: *mut Handle,
+                defaulted: *mut i32,
+            ) -> i32;
+            fn SetNamedSecurityInfoW(
+                path: *mut u16,
+                kind: i32,
+                fields: u32,
+                owner: Handle,
+                group: Handle,
+                dacl: Handle,
+                sacl: Handle,
+            ) -> u32;
+            fn GetNamedSecurityInfoW(
+                path: *mut u16,
+                kind: i32,
+                fields: u32,
+                owner: *mut Handle,
+                group: *mut Handle,
+                dacl: *mut Handle,
+                sacl: *mut Handle,
+                descriptor: *mut Handle,
+            ) -> u32;
+        }
+        let pkg = volume.package_sid().to_string();
+        let dir = "D:\\t82ctl";
+        if std::fs::create_dir(dir).is_ok() {
+            let sddl = format!("D:P(A;;FA;;;{pkg})(A;;FA;;;BA)");
+            let text = wide(&sddl);
+            let mut raw_sd: Handle = null_mut();
+            let mut nbytes = 0u32;
+            let converted = unsafe {
+                ConvertStringSecurityDescriptorToSecurityDescriptorW(
+                    text.as_ptr(),
+                    1,
+                    &mut raw_sd,
+                    &mut nbytes,
+                )
+            };
+            let mut dacl: Handle = null_mut();
+            let mut sacl: Handle = null_mut();
+            let mut present = 0i32;
+            let mut defaulted = 0i32;
+            if converted != 0
+                && !raw_sd.is_null()
+                && unsafe {
+                    GetSecurityDescriptorDacl(raw_sd, &mut present, &mut dacl, &mut defaulted)
+                } != 0
+            {
+                let mut p = wide(dir);
+                let stage = unsafe {
+                    SetNamedSecurityInfoW(
+                        p.as_mut_ptr(),
+                        1,
+                        0x4,
+                        null_mut(),
+                        null_mut(),
+                        dacl,
+                        null_mut(),
+                    )
+                };
+                eprintln!("T82 dctl dacl stage={stage}");
+            }
+            if !raw_sd.is_null() {
+                unsafe {
+                    LocalFree(raw_sd);
+                }
+            }
+            let text = wide("S:(ML;;NW;;;LW)");
+            let mut raw_sd: Handle = null_mut();
+            let converted = unsafe {
+                ConvertStringSecurityDescriptorToSecurityDescriptorW(
+                    text.as_ptr(),
+                    1,
+                    &mut raw_sd,
+                    &mut nbytes,
+                )
+            };
+            if converted != 0
+                && !raw_sd.is_null()
+                && unsafe {
+                    GetSecurityDescriptorSacl(raw_sd, &mut present, &mut sacl, &mut defaulted)
+                } != 0
+                && present != 0
+            {
+                let mut p = wide(dir);
+                let stage = unsafe {
+                    SetNamedSecurityInfoW(
+                        p.as_mut_ptr(),
+                        1,
+                        0x10,
+                        null_mut(),
+                        null_mut(),
+                        null_mut(),
+                        sacl,
+                    )
+                };
+                eprintln!("T82 dctl label stage={stage}");
+            }
+            if !raw_sd.is_null() {
+                unsafe {
+                    LocalFree(raw_sd);
+                }
+            }
+        }
+        let roots = T81_ROOTS
+            .lock()
+            .map(|slot| slot.clone())
+            .unwrap_or_default();
+        if let Some(root_a) = roots
+            .lines()
+            .find_map(|line| line.strip_prefix("A="))
+            .map(str::to_string)
+        {
+            for target in [root_a.clone(), format!("{root_a}t81dir")] {
+                let mut p = wide(&target);
+                let mut descriptor: Handle = null_mut();
+                let status = unsafe {
+                    GetNamedSecurityInfoW(
+                        p.as_mut_ptr(),
+                        1,
+                        0x1F,
+                        null_mut(),
+                        null_mut(),
+                        null_mut(),
+                        null_mut(),
+                        &mut descriptor,
+                    )
+                };
+                if status == 0 && !descriptor.is_null() {
+                    let mut text: *mut u16 = null_mut();
+                    let mut length = 0u32;
+                    let ok = unsafe {
+                        ConvertSecurityDescriptorToStringSecurityDescriptorW(
+                            descriptor,
+                            1,
+                            0x1F,
+                            &mut text,
+                            &mut length,
+                        )
+                    };
+                    if ok != 0 && !text.is_null() {
+                        let mut count = 0usize;
+                        while count < 1024 && unsafe { *text.add(count) } != 0 {
+                            count += 1;
+                        }
+                        let sddl = String::from_utf16_lossy(unsafe {
+                            std::slice::from_raw_parts(text, count)
+                        });
+                        eprintln!("T82 sddl {target}: {sddl}");
+                        unsafe {
+                            LocalFree(text.cast());
+                        }
+                    }
+                    unsafe {
+                        LocalFree(descriptor);
+                    }
+                } else {
+                    eprintln!("T82 sddl {target} status={status}");
+                }
+            }
+        }
+    }
     // T81: replica volumes, built once per process. A attaches with a NULL
     // descriptor, B with the Fix #1 descriptor; both then follow the design's own
     // sequence (GPT initialize, format.com NTFS, mount point) and get one test
@@ -2076,6 +2265,78 @@ fn policy_probe(
                     }
                     eprintln!("T74 dev mask=0x{mask:08X} ok");
                 }
+            }
+        }
+        // T82: on replica A — create directly in the volume root, and open the
+        // test directory itself with a data mask.
+        {
+            let roots = T81_ROOTS.lock().map(|slot| slot.clone()).unwrap_or_default();
+            if let Some(root_a) = roots
+                .lines()
+                .find_map(|line| line.strip_prefix("A="))
+                .map(str::to_string)
+            {
+                let stamp = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map(|d| d.as_nanos())
+                    .unwrap_or(0);
+                let path = wide(&format!("{root_a}leaf-{stamp}"));
+                let handle = unsafe {
+                    CreateFileW(path.as_ptr(), 0xC003_0080, 3, null_mut(), 1, 0x80, null_mut())
+                };
+                if handle.is_null() || handle as isize == -1 {
+                    eprintln!("T82 root create err={}", unsafe { GetLastError() });
+                } else {
+                    unsafe {
+                        CloseHandle(handle);
+                    }
+                    eprintln!("T82 root create ok");
+                }
+                let path = wide(&format!("{root_a}t81dir"));
+                let handle = unsafe {
+                    CreateFileW(
+                        path.as_ptr(),
+                        0x2,
+                        7,
+                        null_mut(),
+                        3,
+                        0x0220_0000,
+                        null_mut(),
+                    )
+                };
+                if handle.is_null() || handle as isize == -1 {
+                    eprintln!("T82 dir open-write err={}", unsafe { GetLastError() });
+                } else {
+                    unsafe {
+                        CloseHandle(handle);
+                    }
+                    eprintln!("T82 dir open-write ok");
+                }
+            }
+        }
+        // T82: create inside a control directory on the D: drive (a real disk
+        // volume, not a VHD), prepared by the T82 host block.
+        {
+            let path = std::path::Path::new("D:\\t82ctl");
+            if path.is_dir() {
+                let stamp = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map(|d| d.as_nanos())
+                    .unwrap_or(0);
+                let leaf = wide(&format!("D:\\t82ctl\\leaf-{stamp}"));
+                let handle = unsafe {
+                    CreateFileW(leaf.as_ptr(), 0xC003_0080, 3, null_mut(), 1, 0x80, null_mut())
+                };
+                if handle.is_null() || handle as isize == -1 {
+                    eprintln!("T82 dctl create err={}", unsafe { GetLastError() });
+                } else {
+                    unsafe {
+                        CloseHandle(handle);
+                    }
+                    eprintln!("T82 dctl create ok");
+                }
+            } else {
+                eprintln!("T82 dctl missing");
             }
         }
         // T81: create inside each replica volume's test directory.
