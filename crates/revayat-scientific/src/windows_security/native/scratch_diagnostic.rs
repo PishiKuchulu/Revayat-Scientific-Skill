@@ -855,6 +855,124 @@ fn policy_probe(
             }
         }
     }
+    // T75 setup: control directory at the system drive ROOT (outside any profile).
+    {
+        #[link(name = "advapi32")]
+        unsafe extern "system" {
+            fn ConvertStringSecurityDescriptorToSecurityDescriptorW(
+                text: *const u16,
+                revision: u32,
+                descriptor: *mut Handle,
+                size: *mut u32,
+            ) -> i32;
+            fn GetSecurityDescriptorDacl(
+                descriptor: Handle,
+                present: *mut i32,
+                dacl: *mut Handle,
+                defaulted: *mut i32,
+            ) -> i32;
+            fn GetSecurityDescriptorSacl(
+                descriptor: Handle,
+                present: *mut i32,
+                sacl: *mut Handle,
+                defaulted: *mut i32,
+            ) -> i32;
+            fn SetNamedSecurityInfoW(
+                path: *mut u16,
+                kind: i32,
+                fields: u32,
+                owner: Handle,
+                group: Handle,
+                dacl: Handle,
+                sacl: Handle,
+            ) -> u32;
+        }
+        let pkg = volume.package_sid();
+        let drive = std::env::temp_dir()
+            .to_string_lossy()
+            .chars()
+            .take(2)
+            .collect::<String>();
+        let dir = format!("{drive}\\t75root");
+        let _ = std::fs::create_dir(&dir);
+        let sddl = format!("D:P(A;;FA;;;{pkg})(A;;FA;;;BA)");
+        let text = wide(&sddl);
+        let mut raw: Handle = null_mut();
+        let mut bytes = 0u32;
+        let converted = unsafe {
+            ConvertStringSecurityDescriptorToSecurityDescriptorW(
+                text.as_ptr(),
+                1,
+                &mut raw,
+                &mut bytes,
+            )
+        };
+        let mut dacl: Handle = null_mut();
+        let mut present = 0i32;
+        let mut defaulted = 0i32;
+        let mut stage = 0xFFFF_FFFFu32;
+        if converted != 0
+            && !raw.is_null()
+            && unsafe { GetSecurityDescriptorDacl(raw, &mut present, &mut dacl, &mut defaulted) }
+                != 0
+        {
+            let mut path = wide(&dir);
+            stage = unsafe {
+                SetNamedSecurityInfoW(
+                    path.as_mut_ptr(),
+                    1,
+                    0x4,
+                    null_mut(),
+                    null_mut(),
+                    dacl,
+                    null_mut(),
+                )
+            };
+        }
+        if !raw.is_null() {
+            unsafe {
+                LocalFree(raw);
+            }
+        }
+        let label = "S:(ML;;NW;;;LW)";
+        let text = wide(label);
+        let mut raw2: Handle = null_mut();
+        let mut sacl: Handle = null_mut();
+        let converted2 = unsafe {
+            ConvertStringSecurityDescriptorToSecurityDescriptorW(
+                text.as_ptr(),
+                1,
+                &mut raw2,
+                &mut bytes,
+            )
+        };
+        let mut stage2 = 0xFFFF_FFFFu32;
+        if converted2 != 0
+            && !raw2.is_null()
+            && unsafe { GetSecurityDescriptorSacl(raw2, &mut present, &mut sacl, &mut defaulted) }
+                != 0
+            && present != 0
+        {
+            let mut path = wide(&dir);
+            stage2 = unsafe {
+                SetNamedSecurityInfoW(
+                    path.as_mut_ptr(),
+                    1,
+                    0x10,
+                    null_mut(),
+                    null_mut(),
+                    null_mut(),
+                    sacl,
+                )
+            };
+        }
+        if !raw2.is_null() {
+            unsafe {
+                LocalFree(raw2);
+            }
+        }
+        eprintln!("T75 setup dacl_stage=0x{stage:08X} label_stage=0x{stage2:08X}");
+    }
     // T72 setup: control directory on the system drive (temp dir), DACL grants the
     // package FA, label Low — same impersonated create runs against it in the
     // scoped block, splitting volume-stack vs token/profile causes.
@@ -1633,6 +1751,26 @@ fn policy_probe(
                     }
                     eprintln!("T74 dev mask=0x{mask:08X} ok");
                 }
+            }
+        }
+        // T75: create inside the system-drive-root control directory.
+        {
+            let drive = std::env::temp_dir()
+                .to_string_lossy()
+                .chars()
+                .take(2)
+                .collect::<String>();
+            let path = wide(&format!("{drive}\\t75root\\leaf"));
+            let handle = unsafe {
+                CreateFileW(path.as_ptr(), 0xC003_0080, 3, null_mut(), 1, 0x80, null_mut())
+            };
+            if handle.is_null() || handle as isize == -1 {
+                eprintln!("T75 root create err={}", unsafe { GetLastError() });
+            } else {
+                unsafe {
+                    CloseHandle(handle);
+                }
+                eprintln!("T75 root create ok");
             }
         }
         // T68: the impersonation token's user and AppContainer SIDs as strings.
