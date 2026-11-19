@@ -175,28 +175,6 @@ impl Root {
         self.require()?;
         let path = format!("{}{leaf}", self.path);
         absent(&path)?;
-        if leaf == "positive-primary" {
-            for (tag, mask) in [
-                ("a", 0xC0030080u32),
-                ("b", 0x001301BFu32),
-                ("c", 0x00000002u32),
-                ("d", 0x80000000u32),
-            ] {
-                let probe_path = format!("{}t59-{tag}", self.path);
-                match open(&probe_path, mask, 3, 1, 0x00200080, std::ptr::null()) {
-                    Ok(mut probe) => {
-                        let _ = disposition(probe.0);
-                        let _ = probe.close();
-                        eprintln!("T59 mask_{tag}=0x{mask:08X} ok");
-                    }
-                    Err(_) => {
-                        eprintln!("T59 mask_{tag}=0x{mask:08X} err={}", unsafe {
-                            GetLastError()
-                        });
-                    }
-                }
-            }
-        }
         let mut handle = open(&path, 0xC0030080, 3, 1, 0x00200080, std::ptr::null())?;
         let result = (|| {
             let id = identity(handle.0, false)?;
