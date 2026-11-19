@@ -757,12 +757,17 @@ fn policy_probe(
             if ok != 0 {
                 let physical = format!("\\\\.\\PhysicalDrive{}", info.number);
                 let ppath = wide(&physical);
-                let disk =
-                    unsafe { CreateFileW(ppath.as_ptr(), 0x80, 7, null_mut(), 3, 0, null_mut()) };
+                let disk = unsafe {
+                    CreateFileW(ppath.as_ptr(), 0x0002_0080, 7, null_mut(), 3, 0, null_mut())
+                };
                 if disk.is_null() || disk as isize == -1 {
                     eprintln!("T73 disk open failed err={}", unsafe { GetLastError() });
                 } else {
-                    if let Ok(bytes) = access::security(disk, 0x17) {
+                    let secured = access::security(disk, 0x17);
+                    if let Err(error) = &secured {
+                        eprintln!("T73 disk security read failed: {error}");
+                    }
+                    if let Ok(bytes) = secured {
                         let mut text: *mut u16 = null_mut();
                         let mut length = 0u32;
                         let cok = unsafe {
