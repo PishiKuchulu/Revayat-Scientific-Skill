@@ -1086,7 +1086,8 @@ fn policy_probe(
                          descriptor_sddl: Option<&str>,
                          vhd_id: u128,
                          gpt_id: u128,
-                         part_id: u128|
+                         part_id: u128,
+                         auto_letter: bool|
              -> Result<String> {
                 let image = std::env::temp_dir().join(format!("t81{tag}.vhdx"));
                 let _ = std::fs::remove_file(&image);
@@ -1128,12 +1129,24 @@ fn policy_probe(
                     Version: ATTACH_VIRTUAL_DISK_VERSION_1,
                     ..Default::default()
                 };
+                let drives_before: Vec<char> = if auto_letter {
+                    ('A'..='Z')
+                        .filter(|d| std::path::Path::new(&format!("{d}:\\")).exists())
+                        .collect()
+                } else {
+                    Vec::new()
+                };
+                let attach_flags = if auto_letter {
+                    ATTACH_VIRTUAL_DISK_FLAG(0)
+                } else {
+                    ATTACH_VIRTUAL_DISK_FLAG_NO_DRIVE_LETTER
+                        | ATTACH_VIRTUAL_DISK_FLAG_PERMANENT_LIFETIME
+                };
                 let status = unsafe {
                     AttachVirtualDisk(
                         handle,
                         descriptor.as_mut().map(|d| PSECURITY_DESCRIPTOR(d.0)),
-                        ATTACH_VIRTUAL_DISK_FLAG_NO_DRIVE_LETTER
-                            | ATTACH_VIRTUAL_DISK_FLAG_PERMANENT_LIFETIME,
+                        attach_flags,
                         0,
                         Some(&attach_parameters),
                         None,
@@ -1153,8 +1166,25 @@ fn policy_probe(
                     scratch_layout::guid(&format!("{:?}", GUID::from_u128(part_id)))?,
                 )?;
                 scratch_layout::format(&binding, &std::env::temp_dir())?;
-                let root = scratch_layout::choose_drive()?;
-                scratch_layout::mount(&binding, &root)?;
+                let root = if auto_letter {
+                    let mut found = String::new();
+                    for _ in 0..40 {
+                        let now: Vec<char> = ('A'..='Z')
+                            .filter(|d| std::path::Path::new(&format!("{d}:\\")).exists())
+                            .collect();
+                        if let Some(d) = now.iter().find(|d| !drives_before.contains(d)) {
+                            found = format!("{d}:\\");
+                            break;
+                        }
+                        std::thread::sleep(std::time::Duration::from_millis(250));
+                    }
+                    ensure!(!found.is_empty(), "T81 {tag} no auto letter appeared");
+                    found
+                } else {
+                    let root = scratch_layout::choose_drive()?;
+                    scratch_layout::mount(&binding, &root)?;
+                    root
+                };
                 let dir = format!("{root}t81dir");
                 std::fs::create_dir(&dir)?;
                 let sddl = format!("D:P(A;;FA;;;{pkg})(A;;FA;;;BA)");
@@ -1243,6 +1273,7 @@ fn policy_probe(
                 0x81810001_1111_4000_8000_000000000001,
                 0x81810002_1111_4000_8000_000000000002,
                 0x81810003_1111_4000_8000_000000000003,
+                false,
             ) {
                 Ok(root) => {
                     eprintln!("T81 A ready root={root}");
@@ -1256,12 +1287,27 @@ fn policy_probe(
                 0x81810004_1111_4000_8000_000000000004,
                 0x81810005_1111_4000_8000_000000000005,
                 0x81810006_1111_4000_8000_000000000006,
+                false,
             ) {
                 Ok(root) => {
                     eprintln!("T81 B ready root={root}");
                     roots.push_str(&format!("B={root}\n"));
                 }
                 Err(error) => eprintln!("T81 B failed: {error}"),
+            }
+            match build(
+                "C",
+                None,
+                0x81810007_1111_4000_8000_000000000007,
+                0x81810008_1111_4000_8000_000000000008,
+                0x81810009_1111_4000_8000_000000000009,
+                true,
+            ) {
+                Ok(root) => {
+                    eprintln!("T81 C ready root={root}");
+                    roots.push_str(&format!("C={root}\n"));
+                }
+                Err(error) => eprintln!("T81 C failed: {error}"),
             }
             // T83: dump SDDLs (replica A root + its dir, C:\ root, D:\ root) while
             // the roots are still local to this block.
