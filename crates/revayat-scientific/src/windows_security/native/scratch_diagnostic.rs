@@ -1281,11 +1281,11 @@ fn policy_probe(
                 }
                 let mut targets: Vec<String> = vec!["C:\\".to_string(), "D:\\".to_string()];
                 for line in roots.lines() {
-                    if let Some((tag, root)) = line.split_once('=') {
-                        if tag == "A" {
-                            targets.push(root.to_string());
-                            targets.push(format!("{root}t81dir"));
-                        }
+                    if let Some((tag, root)) = line.split_once('=')
+                        && tag == "A"
+                    {
+                        targets.push(root.to_string());
+                        targets.push(format!("{root}t81dir"));
                     }
                 }
                 for target in targets {
