@@ -681,6 +681,234 @@ fn policy_probe(
             );
         }
     }
+    // T71 setup: private-policy-shaped variants + full-descriptor treatment control.
+    {
+        #[link(name = "advapi32")]
+        unsafe extern "system" {
+            fn GetSecurityDescriptorOwner(
+                descriptor: Handle,
+                owner: *mut Handle,
+                defaulted: *mut i32,
+            ) -> i32;
+            fn GetSecurityDescriptorGroup(
+                descriptor: Handle,
+                group: *mut Handle,
+                defaulted: *mut i32,
+            ) -> i32;
+            fn GetSecurityDescriptorSacl(
+                descriptor: Handle,
+                present: *mut i32,
+                sacl: *mut Handle,
+                defaulted: *mut i32,
+            ) -> i32;
+            fn SetNamedSecurityInfoW(
+                path: *mut u16,
+                kind: i32,
+                fields: u32,
+                owner: Handle,
+                group: Handle,
+                dacl: Handle,
+                sacl: Handle,
+            ) -> u32;
+        }
+        #[link(name = "ntdll")]
+        unsafe extern "system" {
+            fn NtSetSecurityObject(
+                handle: Handle,
+                fields: u32,
+                data: *const std::ffi::c_void,
+            ) -> i32;
+        }
+        let pkg = volume.package_sid().to_string();
+        let host_sid = volume.intent.host.clone();
+        let dacls = [
+            format!("D:P(A;;FA;;;{host_sid})(A;;FA;;;{pkg})"),
+            format!(
+                "D:P(D;;0x000C0000;;;{pkg})(D;;0x000C0000;;;OW)(A;;FA;;;SY)(A;;FA;;;BA)(A;;FA;;;{host_sid})(A;;FA;;;{pkg})"
+            ),
+            format!("D:P(A;OICI;0x001301BF;;;{pkg})"),
+        ];
+        // u1: full private treatment on t71-1 with the private descriptor.
+        {
+            let dir = format!("{}t71-1", volume.drive_root());
+            let _ = std::fs::create_dir(&dir);
+            let full = format!(
+                "O:{host_sid}G:{host_sid}D:P(A;;FA;;;{host_sid})(A;;FA;;;{pkg})S:(ML;OICI;NW;;;LW)"
+            );
+            let text = wide(&full);
+            let mut raw: Handle = null_mut();
+            let mut bytes = 0u32;
+            let converted = unsafe {
+                ConvertStringSecurityDescriptorToSecurityDescriptorW(
+                    text.as_ptr(),
+                    1,
+                    &mut raw,
+                    &mut bytes,
+                )
+            };
+            let mut owner: Handle = null_mut();
+            let mut group: Handle = null_mut();
+            let mut sacl: Handle = null_mut();
+            let mut present = 0i32;
+            let mut defaulted = 0i32;
+            let mut stage = 0u32;
+            if converted != 0 && !raw.is_null() {
+                let extracted =
+                    unsafe { GetSecurityDescriptorOwner(raw, &mut owner, &mut defaulted) } != 0
+                        && unsafe { GetSecurityDescriptorGroup(raw, &mut group, &mut defaulted) }
+                            != 0
+                        && unsafe {
+                            GetSecurityDescriptorSacl(raw, &mut present, &mut sacl, &mut defaulted)
+                        } != 0
+                        && present != 0;
+                if extracted {
+                    let mut path = wide(&dir);
+                    stage = unsafe {
+                        SetNamedSecurityInfoW(
+                            path.as_mut_ptr(),
+                            1,
+                            0x3,
+                            owner,
+                            group,
+                            null_mut(),
+                            null_mut(),
+                        )
+                    };
+                    if stage == 0 {
+                        stage = unsafe {
+                            SetNamedSecurityInfoW(
+                                path.as_mut_ptr(),
+                                1,
+                                0x10,
+                                null_mut(),
+                                null_mut(),
+                                null_mut(),
+                                sacl,
+                            )
+                        };
+                    }
+                    if stage == 0 {
+                        let path2 = wide(&dir);
+                        let handle = unsafe {
+                            CreateFileW(
+                                path2.as_ptr(),
+                                0x0006_0080,
+                                7,
+                                null_mut(),
+                                3,
+                                0x0200_0000,
+                                null_mut(),
+                            )
+                        };
+                        if !handle.is_null() && handle as isize != -1 {
+                            let status = unsafe { NtSetSecurityObject(handle, 4, raw) };
+                            stage = status as u32;
+                            unsafe {
+                                CloseHandle(handle);
+                            }
+                        } else {
+                            stage = 0xFFFF_FFFF;
+                        }
+                    }
+                }
+                unsafe {
+                    LocalFree(raw);
+                }
+            }
+            eprintln!("T71 setup u1 converted={converted} stage=0x{stage:08X}");
+        }
+        // u2..u4: DACL-only variants on t71-2..t71-4 (NtSetSecurityObject pattern).
+        for (index, sddl) in dacls.iter().enumerate() {
+            let dir = format!("{}t71-{}", volume.drive_root(), index + 2);
+            let _ = std::fs::create_dir(&dir);
+            let text = wide(sddl);
+            let mut raw: Handle = null_mut();
+            let mut bytes = 0u32;
+            let converted = unsafe {
+                ConvertStringSecurityDescriptorToSecurityDescriptorW(
+                    text.as_ptr(),
+                    1,
+                    &mut raw,
+                    &mut bytes,
+                )
+            };
+            let mut status = -1i32;
+            if converted != 0 && !raw.is_null() {
+                let path = wide(&dir);
+                let handle = unsafe {
+                    CreateFileW(
+                        path.as_ptr(),
+                        0x0006_0080,
+                        7,
+                        null_mut(),
+                        3,
+                        0x0200_0000,
+                        null_mut(),
+                    )
+                };
+                if !handle.is_null() && handle as isize != -1 {
+                    status = unsafe { NtSetSecurityObject(handle, 4, raw) };
+                    unsafe {
+                        CloseHandle(handle);
+                    }
+                }
+                unsafe {
+                    LocalFree(raw);
+                }
+            }
+            eprintln!(
+                "T71 setup u{} converted={converted} status=0x{status:08X}",
+                index + 2
+            );
+        }
+        // Readbacks of the t71-1 and t71-4 landed descriptors.
+        for name in ["t71-1", "t71-4"] {
+            let dir = format!("{}{name}", volume.drive_root());
+            let path = wide(&dir);
+            let handle = unsafe {
+                CreateFileW(
+                    path.as_ptr(),
+                    0x80,
+                    7,
+                    null_mut(),
+                    3,
+                    0x0200_0000,
+                    null_mut(),
+                )
+            };
+            if !handle.is_null() && handle as isize != -1 {
+                if let Ok(bytes) = access::security(handle, 0x17) {
+                    let mut text: *mut u16 = null_mut();
+                    let mut length = 0u32;
+                    let ok = unsafe {
+                        ConvertSecurityDescriptorToStringSecurityDescriptorW(
+                            bytes.as_ptr().cast(),
+                            1,
+                            0x17,
+                            &mut text,
+                            &mut length,
+                        )
+                    };
+                    if ok != 0 && !text.is_null() {
+                        let mut count = 0usize;
+                        while count < 1024 && unsafe { *text.add(count) } != 0 {
+                            count += 1;
+                        }
+                        let sddl = String::from_utf16_lossy(unsafe {
+                            std::slice::from_raw_parts(text, count)
+                        });
+                        eprintln!("T71 {name} landed: {sddl}");
+                        unsafe {
+                            LocalFree(text.cast());
+                        }
+                    }
+                }
+                unsafe {
+                    CloseHandle(handle);
+                }
+            }
+        }
+    }
     // T70: host-side truth about a fresh child directory: its landed DACL, which
     // open masks the host itself gets, and AccessCheck on the full create masks.
     {
@@ -1027,6 +1255,21 @@ fn policy_probe(
                     CloseHandle(handle);
                 }
                 eprintln!("T61 {tag} mask=0x{mask:08X} ok");
+            }
+        }
+        // T71: leaf creates in the private-policy dirs and the T71 variant dirs.
+        for name in ["temp", "private-creator", "t71-1", "t71-2", "t71-3", "t71-4"] {
+            let path = wide(&format!("{}{name}\\leaf", volume.drive_root()));
+            let handle = unsafe {
+                CreateFileW(path.as_ptr(), 0xC003_0080, 3, null_mut(), 1, 0x80, null_mut())
+            };
+            if handle.is_null() || handle as isize == -1 {
+                eprintln!("T71 {name} err={}", unsafe { GetLastError() });
+            } else {
+                unsafe {
+                    CloseHandle(handle);
+                }
+                eprintln!("T71 {name} ok");
             }
         }
         // T68: the impersonation token's user and AppContainer SIDs as strings.
