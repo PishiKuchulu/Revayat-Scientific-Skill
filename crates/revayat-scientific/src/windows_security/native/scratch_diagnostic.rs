@@ -1295,7 +1295,7 @@ fn policy_probe(
                         GetNamedSecurityInfoW(
                             p.as_ptr(),
                             1,
-                            0x1F,
+                            0x7,
                             null_mut(),
                             null_mut(),
                             null_mut(),
@@ -1310,7 +1310,7 @@ fn policy_probe(
                             ConvertSecurityDescriptorToStringSecurityDescriptorW(
                                 descriptor.cast_const(),
                                 1,
-                                0x1F,
+                                0x7,
                                 &mut text,
                                 &mut length,
                             )
