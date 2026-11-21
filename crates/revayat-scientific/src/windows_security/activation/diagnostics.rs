@@ -286,7 +286,7 @@ impl fmt::Display for AuthoredFailure {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         // Preserve nested authored stages in ordinary CLI formatting. The same
         // closed visitor bounds depth and bytes and never formats a raw cause.
-        f.write_str(&project(Some(self), &self.original))
+        f.write_str(&project(Some(self), &self.original, false))
     }
 }
 impl fmt::Debug for AuthoredFailure {
@@ -337,39 +337,47 @@ pub fn native(stage: Stage, numbers: Numbers) -> anyhow::Error {
 }
 /// The diagnostic projection visits only known private carriers and never formats a raw cause.
 pub fn summary(error: &anyhow::Error) -> String {
-    project(None, error)
+    project(None, error, false)
 }
-fn project(prefix: Option<&AuthoredFailure>, error: &anyhow::Error) -> String {
-    fn visit(error: &anyhow::Error, depth: usize, lines: &mut Vec<String>) {
+/// TEMP-DIAG (test branch only): like summary, but reveals the innermost raw cause.
+pub fn summary_raw(error: &anyhow::Error) -> String {
+    project(None, error, true)
+}
+fn project(prefix: Option<&AuthoredFailure>, error: &anyhow::Error, raw: bool) -> String {
+    fn visit(error: &anyhow::Error, depth: usize, lines: &mut Vec<String>, raw: bool) {
         if depth >= 16 || lines.len() >= 16 {
             return;
         }
         if let Some(value) = error.downcast_ref::<AuthoredFailure>() {
             lines.push(ClosedHeader(value).to_string());
-            visit(value.original(), depth + 1, lines);
+            visit(value.original(), depth + 1, lines, raw);
         } else if let Some(value) = error.downcast_ref::<Failures>() {
             lines.push(format!(
                 "fixed activation failure_group count={}",
                 value.errors.len()
             ));
             for error in &value.errors {
-                visit(error, depth + 1, lines);
+                visit(error, depth + 1, lines, raw);
             }
         } else if let Some(value) =
             error.downcast_ref::<crate::windows_security::sxs::PrivateFailure>()
         {
             lines.push(value.to_string());
-            visit(value.original(), depth + 1, lines);
+            visit(value.original(), depth + 1, lines, raw);
         } else if let Some(value) = error.downcast_ref::<QualifiedFailure>() {
             lines.push("fixed activation cleanup_qualified=True diagnostic_failed=True".into());
-            visit(value.original(), depth + 1, lines);
+            visit(value.original(), depth + 1, lines, raw);
         } else if let Some(value) = error.downcast_ref::<super::threads::RetainedFailure>() {
             lines.push("fixed activation retained_uncertainty=True".into());
-            visit(value.original(), depth + 1, lines);
+            visit(value.original(), depth + 1, lines, raw);
         } else if let Some(value) = error.downcast_ref::<std::io::Error>() {
             lines.push(format!(
                 "fixed native I/O failure native_error={:?}",
                 value.raw_os_error()
+            ));
+        } else if raw {
+            lines.push(format!(
+                "fixed native diagnostic detail_withheld=True TEMP-DIAG raw={error}"
             ));
         } else {
             lines.push("fixed native diagnostic detail_withheld=True".into());
@@ -379,7 +387,7 @@ fn project(prefix: Option<&AuthoredFailure>, error: &anyhow::Error) -> String {
     if let Some(value) = prefix {
         lines.push(ClosedHeader(value).to_string());
     }
-    visit(error, usize::from(prefix.is_some()), &mut lines);
+    visit(error, usize::from(prefix.is_some()), &mut lines, raw);
     let mut result = String::new();
     for line in lines {
         let separator = usize::from(!result.is_empty());

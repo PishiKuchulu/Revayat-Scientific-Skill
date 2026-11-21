@@ -53,7 +53,7 @@ fn actual_fixed_explicit_id2_pairs_csr_only_with_real_os_profile_and_restoration
         runtime::with_cleanup(result, tools.close())
     })();
     let proof = runtime::with_cleanup(result, work.close().map_err(Into::into))
-        .unwrap_or_else(|error| panic!("{}", diagnostics::summary(&error)));
+        .unwrap_or_else(|error| panic!("{}", diagnostics::summary_raw(&error)));
     assert!(
         proof.creation_bound
             && proof.entry_captured
@@ -84,7 +84,7 @@ fn actual_exit_wait_failure_still_retires_generation_handles_once() {
         diagnostics::find::<InjectedExitWait>(&error)
             .is_some_and(|cause| std::sync::Arc::ptr_eq(&cause.0, &injected)),
         "{}",
-        diagnostics::summary(&error)
+        diagnostics::summary_raw(&error)
     );
     assert_eq!(
         order,

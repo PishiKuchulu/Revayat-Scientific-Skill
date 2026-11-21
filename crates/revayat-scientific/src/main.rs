@@ -84,16 +84,21 @@ fn dispatch(cli: &Cli) -> Result<i32> {
                     &options.owned_run,
                 )?;
                 if options.bootstrap_checks {
-                    revayat::windows_security::native::run_bootstrap_checks(&view)?;
+                    revayat::windows_security::native::run_bootstrap_checks(&view)
+                        .map_err(temp_diag)?;
                 }
                 let report = if options.machine_kernel {
-                    revayat::windows_security::native::run_machine_kernel_session(&image, &view)?
+                    revayat::windows_security::native::run_machine_kernel_session(&image, &view)
+                        .map_err(temp_diag)?
                 } else if options.machine_quota {
-                    revayat::windows_security::native::run_machine_quota_session(&image, &view)?
+                    revayat::windows_security::native::run_machine_quota_session(&image, &view)
+                        .map_err(temp_diag)?
                 } else if options.machine_authority {
-                    revayat::windows_security::native::run_machine_authority_session(&image, &view)?
+                    revayat::windows_security::native::run_machine_authority_session(&image, &view)
+                        .map_err(temp_diag)?
                 } else {
-                    revayat::windows_security::native::run_owned_registry_authority(&image, &view)?
+                    revayat::windows_security::native::run_owned_registry_authority(&image, &view)
+                        .map_err(temp_diag)?
                 };
                 println!("{report}");
                 Ok(0)
@@ -157,6 +162,16 @@ fn run(cli: Cli) -> Result<i32> {
         ),
     }
     result
+}
+
+#[cfg(windows)]
+fn temp_diag(error: anyhow::Error) -> anyhow::Error {
+    eprintln!("TEMP-DIAG chain: {error:#}");
+    eprintln!(
+        "TEMP-DIAG summary: {}",
+        revayat::windows_security::activation::diagnostics::summary_raw(&error)
+    );
+    error
 }
 
 fn run_owned(cli: &Cli) -> Result<i32> {
