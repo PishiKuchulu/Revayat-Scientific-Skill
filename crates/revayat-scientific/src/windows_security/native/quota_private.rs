@@ -72,6 +72,75 @@ pub(crate) fn provision_private_creator_file(
         .to_str()
         .ok_or_else(|| anyhow::anyhow!("private creator provision path is not Unicode"))?;
     files::absent(text)?;
+    {
+        // TEMP-DIAG round 7: can the elevated controller set sparse, on the scratch volume and on the system volume?
+        let sibling = format!("{scratch}private-creator\\authority-sparse-probe");
+        let _ = std::fs::remove_file(&sibling);
+        match open(&sibling, 0x40000000, 0, 1, 0x80, null()) {
+            Ok(mut handle) => {
+                let mut returned = 0;
+                // SAFETY: fixed FSCTL_SET_SPARSE on an owned controller handle.
+                let ok = unsafe {
+                    DeviceIoControl(
+                        handle.0,
+                        0x900c4,
+                        null_mut(),
+                        0,
+                        null_mut(),
+                        0,
+                        &mut returned,
+                        null_mut(),
+                    )
+                };
+                let code = if ok == 0 {
+                    unsafe { GetLastError() }
+                } else {
+                    0
+                };
+                eprintln!(
+                    "TEMP-DIAG probe-controller-scratch sparse-ok={} win32={code}",
+                    ok != 0
+                );
+                let _ = handle.close();
+            }
+            Err(_) => eprintln!("TEMP-DIAG probe-controller-scratch open-failed"),
+        }
+        let _ = std::fs::remove_file(&sibling);
+        let probe_path = std::env::temp_dir().join("revayat-sparse-probe.tmp");
+        let _ = std::fs::remove_file(&probe_path);
+        if let Some(probe_text) = probe_path.to_str() {
+            match open(probe_text, 0x40000000, 0, 1, 0x80, null()) {
+                Ok(mut handle) => {
+                    let mut returned = 0;
+                    // SAFETY: fixed FSCTL_SET_SPARSE on an owned controller handle.
+                    let ok = unsafe {
+                        DeviceIoControl(
+                            handle.0,
+                            0x900c4,
+                            null_mut(),
+                            0,
+                            null_mut(),
+                            0,
+                            &mut returned,
+                            null_mut(),
+                        )
+                    };
+                    let code = if ok == 0 {
+                        unsafe { GetLastError() }
+                    } else {
+                        0
+                    };
+                    eprintln!(
+                        "TEMP-DIAG probe-controller-system sparse-ok={} win32={code}",
+                        ok != 0
+                    );
+                    let _ = handle.close();
+                }
+                Err(_) => eprintln!("TEMP-DIAG probe-controller-system open-failed"),
+            }
+        }
+        let _ = std::fs::remove_file(&probe_path);
+    }
     let mut descriptor = Descriptor::new(&format!(
         "O:{}D:P(A;;GA;;;{})(A;;GA;;;{})",
         inventory.user.canonical(),
