@@ -34,6 +34,16 @@ jobs:
         run: cargo clippy --locked --workspace --all-targets -- -D warnings
       - name: Build complete Windows executables before containment tests
         run: cargo build --locked --workspace --all-targets
+      - name: TEMP-DIAG kernel32 identity
+        shell: pwsh
+        run: |
+          $p = "$env:SystemRoot\System32\kernel32.dll"
+          $bytes = [System.IO.File]::ReadAllBytes($p)
+          $pe = [BitConverter]::ToUInt32($bytes, 0x3C)
+          $ts = [BitConverter]::ToUInt32($bytes, $pe + 8)
+          $img = [BitConverter]::ToUInt32($bytes, $pe + 24 + 56)
+          $sha = (Get-FileHash $p -Algorithm SHA256).Hash.ToLower()
+          Write-Host "KERNEL32-IDENTITY sha256=$sha pe_timestamp=$ts image_size=$img file_size=$($bytes.Length)"
       - name: Run ordered Windows validators, kernel controls and forced wall-tree
         run: target/debug/revayat-scientific security-windows --authority-image target/debug/registry-authority.exe --bootstrap-checks --machine-kernel
       - name: Collect actual native Windows harness outcomes
