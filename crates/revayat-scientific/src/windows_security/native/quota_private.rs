@@ -187,7 +187,7 @@ fn provision_sparse_files(
         provision_sparse_file(child_process, &fixture, &descriptor)?;
         for leaf in ["quota-sparse", "quota-aggregate-0", "quota-aggregate-1"] {
             let path = format!("{scratch}{leaf}");
-            provision_sparse_root_leaf(&path, &descriptor, &inventory.user)?;
+            provision_sparse_root_leaf(&path, &descriptor)?;
         }
         Ok(())
     })();
@@ -233,29 +233,19 @@ fn provision_sparse_file(
     combine(operation, original.close())
 }
 
-fn provision_sparse_root_leaf(text: &str, descriptor: &Descriptor, user: &Sid) -> Result<()> {
+fn provision_sparse_root_leaf(text: &str, descriptor: &Descriptor) -> Result<()> {
     files::absent(text)?;
     // The sealed scratch root denies WRITE_DAC and WRITE_OWNER in a create
-    // request, so the leaf is created bare with the worker's proven create
-    // shape and the provisioned descriptor is applied to the created file.
-    let mut original = open(text, 0xC0030080, 3, 1, 0x00200080, std::ptr::null())?;
+    // request, so the leaf is created with the worker's proven create mask;
+    // the provisioned descriptor still applies from creation, as the
+    // supplied descriptor replaces inheritance for the new file.
+    let security = Security {
+        length: size_of::<Security>() as u32,
+        descriptor: descriptor.0,
+        inherit: 0,
+    };
+    let mut original = open(text, 0xC0030080, 3, 1, 0x00200080, &security)?;
     let operation = (|| {
-        let dacl = descriptor.dacl()?;
-        // SAFETY: exclusively owned leaf handle and live descriptor components.
-        ensure!(
-            unsafe {
-                SetSecurityInfo(
-                    original.0,
-                    1,
-                    0x80000005,
-                    user.bytes().as_ptr() as Raw,
-                    null_mut(),
-                    dacl,
-                    null_mut(),
-                )
-            } == 0,
-            "provisioned sparse leaf descriptor application failed"
-        );
         // The controller marks the file sparse before the worker opens it:
         // the contained LPAC worker is denied FSCTL_SET_SPARSE itself.
         eof::sparse(original.0)?;
