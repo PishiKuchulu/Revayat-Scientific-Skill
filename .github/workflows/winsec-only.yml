@@ -41,7 +41,7 @@ jobs:
         run: target/debug/revayat-test-runner --tier native --profile debug --ignored --output execution/native-debug.json --timeout 1200
       - name: Retain independent Rust registry and native contracts
         if: ${{ always() && !cancelled() }}
-        run: cargo test --locked --workspace --all-targets -- --test-threads=1
+        run: cargo test --locked --workspace --all-targets --no-fail-fast -- --test-threads=1
       - name: Preserve native Windows outcomes including case failures
         if: ${{ always() }}
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
