@@ -16,21 +16,23 @@ fn denied(code: Option<i32>) -> bool {
 pub(super) fn sparse(handle: Raw) -> Result<()> {
     let mut returned = 0;
     // SAFETY: fixed FSCTL_SET_SPARSE with no input sets the sparse bit on this owned write handle.
-    ensure!(
-        unsafe {
-            DeviceIoControl(
-                handle,
-                0x900c4,
-                null_mut(),
-                0,
-                null_mut(),
-                0,
-                &mut returned,
-                null_mut(),
-            )
-        } != 0,
-        "native quota sparse control failed"
-    );
+    let ok = unsafe {
+        DeviceIoControl(
+            handle,
+            0x900c4,
+            null_mut(),
+            0,
+            null_mut(),
+            0,
+            &mut returned,
+            null_mut(),
+        )
+    };
+    if ok == 0 {
+        let code = unsafe { GetLastError() };
+        eprintln!("TEMP-DIAG sparse-fail win32={code}");
+    }
+    ensure!(ok != 0, "native quota sparse control failed");
     Ok(())
 }
 fn seek(handle: Raw, length: u64) -> Result<()> {
@@ -44,6 +46,7 @@ fn seek(handle: Raw, length: u64) -> Result<()> {
     Ok(())
 }
 pub(super) fn native(handle: Raw, make_sparse: bool) -> Result<()> {
+    eprintln!("TEMP-DIAG eof-native sparse={make_sparse}");
     if make_sparse {
         sparse(handle)?;
     }
@@ -78,6 +81,7 @@ pub(super) fn controls(root: &Root) -> Result<()> {
             leaf.require()?;
             native(leaf.handle.0, make_sparse)?;
             if make_sparse {
+                eprintln!("TEMP-DIAG site=eof-recheck");
                 sparse(leaf.handle.0)?;
             }
             let result = files::file(leaf.handle.0).set_len(QUOTA_BYTES + 1);
@@ -101,6 +105,7 @@ pub(super) fn controls(root: &Root) -> Result<()> {
             })?);
             let leaf = leaves.last().expect("just pushed fixed leaf");
             leaf.require()?;
+            eprintln!("TEMP-DIAG site=eof-agg");
             sparse(leaf.handle.0)?;
             let result = files::file(leaf.handle.0).set_len(9 * 1024 * 1024);
             if index == 0 {

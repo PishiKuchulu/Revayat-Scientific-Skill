@@ -511,7 +511,9 @@ pub(super) fn controls(root: &Root, plan: &WorkerPlan, inventory: &OwnerInventor
                     } == 0,
                     "private creator own DACL positive failed"
                 );
+                eprintln!("TEMP-DIAG site=priv-a");
                 eof::native(handle, false)?;
+                eprintln!("TEMP-DIAG site=priv-b");
                 eof::native(handle, true)?;
                 for owner in &inventory.owners {
                     let handle = fixture.qualify()?;
@@ -527,6 +529,7 @@ pub(super) fn controls(root: &Root, plan: &WorkerPlan, inventory: &OwnerInventor
                         )
                     };
                     if status == 0 {
+                        eprintln!("TEMP-DIAG site=priv-loop");
                         eof::native(handle, true)?;
                     } else {
                         ensure!(
