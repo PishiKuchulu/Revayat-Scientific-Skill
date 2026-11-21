@@ -514,6 +514,25 @@ pub(super) fn controls(root: &Root, plan: &WorkerPlan, inventory: &OwnerInventor
                 eprintln!("TEMP-DIAG site=priv-a");
                 eof::native(handle, false)?;
                 eprintln!("TEMP-DIAG site=priv-b");
+                {
+                    // TEMP-DIAG round 6: discriminate provisioned handle vs fixture file vs worker process.
+                    match open(&fixture.path, 0x40000000, 3, 3, 0x80, null()) {
+                        Ok(mut probe) => {
+                            let ok = eof::sparse(probe.0).is_ok();
+                            eprintln!("TEMP-DIAG probe-fresh sparse-ok={ok}");
+                            let _ = probe.close();
+                        }
+                        Err(_) => eprintln!("TEMP-DIAG probe-fresh open-failed"),
+                    }
+                    match root.create("quota-ordinary") {
+                        Ok(mut leaf) => {
+                            let ok = eof::sparse(leaf.handle.0).is_ok();
+                            eprintln!("TEMP-DIAG probe-leaf sparse-ok={ok}");
+                            let _ = leaf.close();
+                        }
+                        Err(_) => eprintln!("TEMP-DIAG probe-leaf create-failed"),
+                    }
+                }
                 eof::native(handle, true)?;
                 for owner in &inventory.owners {
                     let handle = fixture.qualify()?;
