@@ -111,6 +111,18 @@ impl Descriptor {
         );
         Ok(dacl)
     }
+    pub(super) fn sacl(&self) -> Result<Raw> {
+        let (mut present, mut defaulted, mut sacl) = (0, 0, null_mut());
+        // SAFETY: live converted descriptor and scalar output fields.
+        ensure!(
+            unsafe { GetSecurityDescriptorSacl(self.0, &mut present, &mut sacl, &mut defaulted) }
+                != 0
+                && present != 0
+                && !sacl.is_null(),
+            "native quota SACL is absent"
+        );
+        Ok(sacl)
+    }
     pub(super) fn close(&mut self) -> Result<()> {
         if self.0.is_null() {
             return Ok(());
@@ -248,6 +260,12 @@ unsafe extern "system" {
         descriptor: Raw,
         present: *mut i32,
         dacl: *mut Raw,
+        defaulted: *mut i32,
+    ) -> i32;
+    pub(super) fn GetSecurityDescriptorSacl(
+        descriptor: Raw,
+        present: *mut i32,
+        sacl: *mut Raw,
         defaulted: *mut i32,
     ) -> i32;
     pub(super) fn SetNamedSecurityInfoW(

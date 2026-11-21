@@ -176,31 +176,46 @@ fn provision_sparse_files(
     scratch: &str,
     inventory: &OwnerInventory,
 ) -> Result<()> {
-    // The low mandatory label matches the volume policy: without it a
-    // provisioned file defaults to medium integrity and the contained
-    // worker is denied write access when it opens the file by path.
     let mut descriptor = Descriptor::new(&format!(
-        "O:{}D:P(A;;GA;;;{})(A;;GA;;;{})S:(ML;;NW;;;LW)",
+        "O:{}D:P(A;;GA;;;{})(A;;GA;;;{})",
         inventory.user.canonical(),
         inventory.user.canonical(),
         inventory.package.canonical(),
     ))?;
+    // The low mandatory label matches the volume policy: without it a
+    // provisioned file keeps the creator's integrity level and the
+    // contained worker is denied write access opening it by path. A
+    // create-time SACL is ignored without SeSecurityPrivilege, so the
+    // label is applied to each file after creation instead.
+    let mut label = Descriptor::new("S:(ML;;NW;;;LW)")?;
     let operation = (|| {
         let fixture = format!("{scratch}private-creator\\authority-protected-sparse");
-        provision_sparse_file(child_process, &fixture, &descriptor)?;
+        provision_sparse_file(child_process, &fixture, &descriptor, &label)?;
         for leaf in ["quota-sparse", "quota-aggregate-0", "quota-aggregate-1"] {
             let path = format!("{scratch}{leaf}");
-            provision_sparse_root_leaf(&path, &descriptor)?;
+            provision_sparse_root_leaf(&path, &descriptor, &label)?;
         }
         Ok(())
     })();
-    combine(operation, descriptor.close())
+    combine(combine(operation, descriptor.close()), label.close())
+}
+
+fn apply_low_label(handle: Raw, label: &Descriptor) -> Result<()> {
+    let sacl = label.sacl()?;
+    // SAFETY: live provisioned handle carrying READ_CONTROL and a live
+    // converted label descriptor; LABEL uses READ_CONTROL only.
+    ensure!(
+        unsafe { SetSecurityInfo(handle, 1, 0x10, null_mut(), null_mut(), null_mut(), sacl) } == 0,
+        "provisioned sparse file label application failed"
+    );
+    Ok(())
 }
 
 fn provision_sparse_file(
     child_process: BorrowedHandle<'_>,
     text: &str,
     descriptor: &Descriptor,
+    label: &Descriptor,
 ) -> Result<()> {
     files::absent(text)?;
     let security = Security {
@@ -213,6 +228,7 @@ fn provision_sparse_file(
         // The controller marks the file sparse before any handle reaches the worker:
         // the contained LPAC worker is denied FSCTL_SET_SPARSE itself.
         eof::sparse(original.0)?;
+        apply_low_label(original.0, label)?;
         files::grant(original.0, 0x1E019F)?;
         let mut duplicated = null_mut();
         // SAFETY: host owns the source; the actual suspended child owns the non-inherited output.
@@ -236,7 +252,11 @@ fn provision_sparse_file(
     combine(operation, original.close())
 }
 
-fn provision_sparse_root_leaf(text: &str, descriptor: &Descriptor) -> Result<()> {
+fn provision_sparse_root_leaf(
+    text: &str,
+    descriptor: &Descriptor,
+    label: &Descriptor,
+) -> Result<()> {
     files::absent(text)?;
     // The sealed scratch root denies WRITE_DAC and WRITE_OWNER in a create
     // request, so the leaf is created with the worker's proven create mask;
@@ -252,6 +272,7 @@ fn provision_sparse_root_leaf(text: &str, descriptor: &Descriptor) -> Result<()>
         // The controller marks the file sparse before the worker opens it:
         // the contained LPAC worker is denied FSCTL_SET_SPARSE itself.
         eof::sparse(original.0)?;
+        apply_low_label(original.0, label)?;
         Ok(())
     })();
     combine(operation, original.close())
