@@ -155,6 +155,9 @@ pub(crate) fn cleanup_provisioned_sparse_files(scratch: &str) -> Result<()> {
         format!("{scratch}quota-sparse"),
         format!("{scratch}quota-aggregate-0"),
         format!("{scratch}quota-aggregate-1"),
+        format!("{scratch}private-creator\\stage-quota-sparse"),
+        format!("{scratch}private-creator\\stage-quota-aggregate-0"),
+        format!("{scratch}private-creator\\stage-quota-aggregate-1"),
     ];
     let mut result = Ok(());
     for text in &paths {
@@ -192,8 +195,9 @@ fn provision_sparse_files(
         let fixture = format!("{scratch}private-creator\\authority-protected-sparse");
         provision_sparse_file(child_process, &fixture, &descriptor, &label)?;
         for leaf in ["quota-sparse", "quota-aggregate-0", "quota-aggregate-1"] {
-            let path = format!("{scratch}{leaf}");
-            provision_sparse_root_leaf(&path, &descriptor, &label, &inventory.user)?;
+            let staging = format!("{scratch}private-creator\\stage-{leaf}");
+            let target = format!("{scratch}{leaf}");
+            provision_sparse_root_leaf(&staging, &target, &descriptor, &label)?;
         }
         Ok(())
     })();
@@ -253,50 +257,42 @@ fn provision_sparse_file(
 }
 
 fn provision_sparse_root_leaf(
-    text: &str,
+    staging: &str,
+    target: &str,
     descriptor: &Descriptor,
     label: &Descriptor,
-    user: &Sid,
 ) -> Result<()> {
-    files::absent(text)?;
-    // The sealed scratch root denies assigning a security descriptor at
-    // creation (its OWNER RIGHTS deny covers WRITE_DAC and WRITE_OWNER),
-    // so the leaf is created bare with the worker's proven create mask
-    // and the provisioned descriptor is applied to the new file below,
-    // before any handle reaches the worker.
-    let mut original = open(text, 0xC0030080, 3, 1, 0x00200080, null())?;
+    files::absent(staging)?;
+    files::absent(target)?;
+    // The sealed scratch root refuses a descriptor twice over: assigning
+    // one at creation is denied, and the inherited OWNER RIGHTS deny
+    // blocks the WRITE_DAC reopen that could apply one afterwards. So
+    // the leaf is fully provisioned inside private-creator, where
+    // descriptor-at-create is proven, and then moved to the scratch
+    // root; a same-volume move keeps the owner, the descriptor, the
+    // label and the sparse attribute.
+    let security = Security {
+        length: size_of::<Security>() as u32,
+        descriptor: descriptor.0,
+        inherit: 0,
+    };
+    let mut original = open(staging, 0xC00C0000, 3, 1, 0x80, &security)?;
     let operation = (|| {
         // The controller marks the file sparse before the worker opens it:
         // the contained LPAC worker is denied FSCTL_SET_SPARSE itself.
         eof::sparse(original.0)?;
+        apply_low_label(original.0, label)?;
         Ok(())
     })();
     combine(operation, original.close())?;
-    // The inherited root DACL grants the host full access, so a reopen
-    // carrying WRITE_DAC and WRITE_OWNER can apply the descriptor.
-    let mut secured = open(text, 0xC00C0000, 3, 3, 0x00200080, null())?;
-    let operation = (|| {
-        let dacl = descriptor.dacl()?;
-        // SAFETY: live reopened handle with WRITE_DAC and WRITE_OWNER, a
-        // live owner SID and a live converted DACL.
-        ensure!(
-            unsafe {
-                SetSecurityInfo(
-                    secured.0,
-                    1,
-                    0x80000005,
-                    user.bytes().as_ptr() as Raw,
-                    null_mut(),
-                    dacl,
-                    null_mut(),
-                )
-            } == 0,
-            "provisioned sparse leaf descriptor application failed"
-        );
-        apply_low_label(secured.0, label)?;
-        Ok(())
-    })();
-    combine(operation, secured.close())
+    let from = wide(staging);
+    let to = wide(target);
+    // SAFETY: fixed provisioned staging and target paths on one volume.
+    ensure!(
+        unsafe { MoveFileW(from.as_ptr(), to.as_ptr()) } != 0,
+        "provisioned sparse leaf move failed"
+    );
+    Ok(())
 }
 
 fn provisioned_handle(root: &Root, expected: &str) -> Result<Owned> {

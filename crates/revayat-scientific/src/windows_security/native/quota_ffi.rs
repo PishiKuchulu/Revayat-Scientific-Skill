@@ -180,6 +180,7 @@ unsafe extern "system" {
         flags: u32,
         template: Raw,
     ) -> Raw;
+    pub(super) fn MoveFileW(existing: *const u16, new: *const u16) -> i32;
     pub(super) fn GetFileType(handle: Raw) -> u32;
     pub(super) fn GetFileInformationByHandleEx(
         handle: Raw,
