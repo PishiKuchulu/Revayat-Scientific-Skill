@@ -122,6 +122,16 @@ pub(super) fn run<'a>(
         drain(&owner.stderr, &mut owner.error, ERROR_LIMIT)?;
         let output = owner.output.finish(OUTPUT_LIMIT)?.to_owned();
         let errors = owner.error.finish(ERROR_LIMIT)?.to_owned();
+        if code != 0 || !errors.is_empty() {
+            eprintln!(
+                "TEMP-DIAG quota-primary captured stderr: {}",
+                String::from_utf8_lossy(&errors)
+            );
+            eprintln!(
+                "TEMP-DIAG quota-primary captured stdout: {}",
+                String::from_utf8_lossy(&output)
+            );
+        }
         ensure!(
             code == 0 && errors.is_empty(),
             "native quota primary refused its closed control plan exit={code:08X}"
