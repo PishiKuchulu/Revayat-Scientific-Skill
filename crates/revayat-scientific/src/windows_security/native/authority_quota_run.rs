@@ -123,14 +123,8 @@ pub(super) fn run<'a>(
         let output = owner.output.finish(OUTPUT_LIMIT)?.to_owned();
         let errors = owner.error.finish(ERROR_LIMIT)?.to_owned();
         if code != 0 || !errors.is_empty() {
-            eprintln!(
-                "TEMP-DIAG quota-primary captured stderr: {}",
-                String::from_utf8_lossy(&errors)
-            );
-            eprintln!(
-                "TEMP-DIAG quota-primary captured stdout: {}",
-                String::from_utf8_lossy(&output)
-            );
+            eprintln!("TEMP-DIAG quota-primary captured stderr: {errors}");
+            eprintln!("TEMP-DIAG quota-primary captured stdout: {output}");
         }
         ensure!(
             code == 0 && errors.is_empty(),
