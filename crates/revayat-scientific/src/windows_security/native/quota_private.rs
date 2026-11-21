@@ -176,8 +176,11 @@ fn provision_sparse_files(
     scratch: &str,
     inventory: &OwnerInventory,
 ) -> Result<()> {
+    // The low mandatory label matches the volume policy: without it a
+    // provisioned file defaults to medium integrity and the contained
+    // worker is denied write access when it opens the file by path.
     let mut descriptor = Descriptor::new(&format!(
-        "O:{}D:P(A;;GA;;;{})(A;;GA;;;{})",
+        "O:{}D:P(A;;GA;;;{})(A;;GA;;;{})S:(ML;;NW;;;LW)",
         inventory.user.canonical(),
         inventory.user.canonical(),
         inventory.package.canonical(),
