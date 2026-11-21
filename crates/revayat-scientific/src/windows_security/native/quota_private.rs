@@ -141,13 +141,11 @@ pub(crate) fn provision_private_creator_file(
         );
     }
     if let Err(error) = provision_sparse_files(child_process, scratch, inventory) {
-        return combine(
-            Err(error),
-            all([
-                cleanup_provisioned_private_file(&path),
-                cleanup_provisioned_sparse_files(scratch),
-            ]),
-        );
+        // No file removal is attempted here: the suspended child still holds
+        // the duplicated fixture handle, so removal would fail on sharing.
+        // Both run drivers chain the provisioned-file cleanups after the
+        // child is finished, on success and failure paths alike.
+        return Err(error);
     }
     Ok(path)
 }
@@ -187,10 +185,10 @@ fn provision_sparse_files(
     ))?;
     let operation = (|| {
         let fixture = format!("{scratch}private-creator\\authority-protected-sparse");
-        provision_sparse_file(child_process, &fixture, &descriptor, true)?;
+        provision_sparse_file(child_process, &fixture, &descriptor)?;
         for leaf in ["quota-sparse", "quota-aggregate-0", "quota-aggregate-1"] {
             let path = format!("{scratch}{leaf}");
-            provision_sparse_file(child_process, &path, &descriptor, false)?;
+            provision_sparse_root_leaf(&path, &descriptor, &inventory.user)?;
         }
         Ok(())
     })();
@@ -201,7 +199,6 @@ fn provision_sparse_file(
     child_process: BorrowedHandle<'_>,
     text: &str,
     descriptor: &Descriptor,
-    duplicate: bool,
 ) -> Result<()> {
     files::absent(text)?;
     let security = Security {
@@ -214,26 +211,55 @@ fn provision_sparse_file(
         // The controller marks the file sparse before any handle reaches the worker:
         // the contained LPAC worker is denied FSCTL_SET_SPARSE itself.
         eof::sparse(original.0)?;
-        if duplicate {
-            files::grant(original.0, 0x1E019F)?;
-            let mut duplicated = null_mut();
-            // SAFETY: host owns the source; the actual suspended child owns the non-inherited output.
-            let ok = unsafe {
-                DuplicateHandle(
-                    GetCurrentProcess(),
+        files::grant(original.0, 0x1E019F)?;
+        let mut duplicated = null_mut();
+        // SAFETY: host owns the source; the actual suspended child owns the non-inherited output.
+        let ok = unsafe {
+            DuplicateHandle(
+                GetCurrentProcess(),
+                original.0,
+                child_process.as_raw_handle(),
+                &mut duplicated,
+                0x001E019F,
+                0,
+                0,
+            )
+        };
+        ensure!(
+            ok != 0 && !duplicated.is_null(),
+            "provisioned sparse handle duplication failed"
+        );
+        Ok(())
+    })();
+    combine(operation, original.close())
+}
+
+fn provision_sparse_root_leaf(text: &str, descriptor: &Descriptor, user: &Sid) -> Result<()> {
+    files::absent(text)?;
+    // The sealed scratch root denies WRITE_DAC and WRITE_OWNER in a create
+    // request, so the leaf is created bare with the worker's proven create
+    // shape and the provisioned descriptor is applied to the created file.
+    let mut original = open(text, 0xC0030080, 3, 1, 0x00200080, std::ptr::null())?;
+    let operation = (|| {
+        let dacl = descriptor.dacl()?;
+        // SAFETY: exclusively owned leaf handle and live descriptor components.
+        ensure!(
+            unsafe {
+                SetSecurityInfo(
                     original.0,
-                    child_process.as_raw_handle(),
-                    &mut duplicated,
-                    0x001E019F,
-                    0,
-                    0,
+                    1,
+                    0x80000005,
+                    user.bytes().as_ptr() as Raw,
+                    null_mut(),
+                    dacl,
+                    null_mut(),
                 )
-            };
-            ensure!(
-                ok != 0 && !duplicated.is_null(),
-                "provisioned sparse handle duplication failed"
-            );
-        }
+            } == 0,
+            "provisioned sparse leaf descriptor application failed"
+        );
+        // The controller marks the file sparse before the worker opens it:
+        // the contained LPAC worker is denied FSCTL_SET_SPARSE itself.
+        eof::sparse(original.0)?;
         Ok(())
     })();
     combine(operation, original.close())
