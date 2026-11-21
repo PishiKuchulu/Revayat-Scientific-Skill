@@ -426,6 +426,10 @@ impl fmt::Debug for PrivateFailure {
 }
 impl std::error::Error for PrivateFailure {}
 pub fn sanitize(error: anyhow::Error) -> anyhow::Error {
+    eprintln!(
+        "TEMP-DIAG sanitize-in: {}",
+        crate::windows_security::activation::diagnostics::summary_raw(&error)
+    );
     if error.is::<PrivateFailure>()
         || error.is::<ReceiptFailure>()
         || error.is::<crate::windows_security::activation::diagnostics::AuthoredFailure>()
