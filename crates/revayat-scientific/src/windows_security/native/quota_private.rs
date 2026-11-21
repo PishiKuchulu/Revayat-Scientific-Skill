@@ -193,7 +193,7 @@ fn provision_sparse_files(
         provision_sparse_file(child_process, &fixture, &descriptor, &label)?;
         for leaf in ["quota-sparse", "quota-aggregate-0", "quota-aggregate-1"] {
             let path = format!("{scratch}{leaf}");
-            provision_sparse_root_leaf(&path, &descriptor, &label)?;
+            provision_sparse_root_leaf(&path, &descriptor, &label, &inventory.user)?;
         }
         Ok(())
     })();
@@ -256,26 +256,47 @@ fn provision_sparse_root_leaf(
     text: &str,
     descriptor: &Descriptor,
     label: &Descriptor,
+    user: &Sid,
 ) -> Result<()> {
     files::absent(text)?;
-    // The sealed scratch root denies WRITE_DAC and WRITE_OWNER in a create
-    // request, so the leaf is created with the worker's proven create mask;
-    // the provisioned descriptor still applies from creation, as the
-    // supplied descriptor replaces inheritance for the new file.
-    let security = Security {
-        length: size_of::<Security>() as u32,
-        descriptor: descriptor.0,
-        inherit: 0,
-    };
-    let mut original = open(text, 0xC0030080, 3, 1, 0x00200080, &security)?;
+    // The sealed scratch root denies assigning a security descriptor at
+    // creation (its OWNER RIGHTS deny covers WRITE_DAC and WRITE_OWNER),
+    // so the leaf is created bare with the worker's proven create mask
+    // and the provisioned descriptor is applied to the new file below,
+    // before any handle reaches the worker.
+    let mut original = open(text, 0xC0030080, 3, 1, 0x00200080, null())?;
     let operation = (|| {
         // The controller marks the file sparse before the worker opens it:
         // the contained LPAC worker is denied FSCTL_SET_SPARSE itself.
         eof::sparse(original.0)?;
-        apply_low_label(original.0, label)?;
         Ok(())
     })();
-    combine(operation, original.close())
+    combine(operation, original.close())?;
+    // The inherited root DACL grants the host full access, so a reopen
+    // carrying WRITE_DAC and WRITE_OWNER can apply the descriptor.
+    let mut secured = open(text, 0xC00C0000, 3, 3, 0x00200080, null())?;
+    let operation = (|| {
+        let dacl = descriptor.dacl()?;
+        // SAFETY: live reopened handle with WRITE_DAC and WRITE_OWNER, a
+        // live owner SID and a live converted DACL.
+        ensure!(
+            unsafe {
+                SetSecurityInfo(
+                    secured.0,
+                    1,
+                    0x80000005,
+                    user.bytes().as_ptr() as Raw,
+                    null_mut(),
+                    dacl,
+                    null_mut(),
+                )
+            } == 0,
+            "provisioned sparse leaf descriptor application failed"
+        );
+        apply_low_label(secured.0, label)?;
+        Ok(())
+    })();
+    combine(operation, secured.close())
 }
 
 fn provisioned_handle(root: &Root, expected: &str) -> Result<Owned> {
