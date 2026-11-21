@@ -140,13 +140,12 @@ pub(crate) fn provision_private_creator_file(
             all([rollback, cleanup_provisioned_private_file(&path)]),
         );
     }
-    if let Err(error) = provision_sparse_files(child_process, scratch, inventory) {
-        // No file removal is attempted here: the suspended child still holds
-        // the duplicated fixture handle, so removal would fail on sharing.
-        // Both run drivers chain the provisioned-file cleanups after the
-        // child is finished, on success and failure paths alike.
-        return Err(error);
-    }
+    // No file removal is attempted on a sparse provisioning failure here:
+    // the suspended child still holds the duplicated fixture handle, so
+    // removal would fail on sharing. Both run drivers chain the
+    // provisioned-file cleanups after the child is finished, on success
+    // and failure paths alike.
+    provision_sparse_files(child_process, scratch, inventory)?;
     Ok(path)
 }
 
